@@ -40,12 +40,16 @@ refactors in items #0001 and #0002.
 
 - Do not enable the optional Effect rule group: Effect is not a direct project
 dependency.
-- Decision: do not add the new policy script to `verify` yet. The user requested
-installation only; violations will be addressed after todos #0001 and #0002.
+- Decision: do not add the new policy script to `verify` yet. This item installs
+  the policy without changing existing source. Baseline findings remain deferred
+  except where `#0001` or `#0002` newly adds or materially modifies the reported
+  construct; unrelated cleanup remains later work.
 - Biome remains the repository formatter and base linter; Oxlint is limited to
 the supplemental custom policy rules. `-A all` disables Oxlint's built-in rules
 so the policy command reports only anti-slop diagnostics.
 - Baseline (2026-09-12): 50 errors across 7 files: 24
   `require-safety-comment-for-type-assertion`, 14 `no-runtime-typeof`, 8
   `no-unknown-parameters`, 3 `no-known-value-widening`, and 1
-  `no-unknown-returns`. These are deferred until after #0001 and #0002.
+  `no-unknown-returns`. During #0001 and #0002, only diagnostics in newly added
+  or materially modified constructs enter scope; the remaining baseline stays
+  deferred.
