@@ -13,6 +13,12 @@ import {
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { openExternalEditor } from "./shared/external-editor";
 import {
+  type CompiledConfig,
+  compileConfig,
+  type FooterBlockId,
+  type LayoutToken,
+} from "./shared/runtime-footer-config";
+import {
   formatGitStatsPlain,
   formatGitStatsStyled,
   type GitStats,
@@ -33,52 +39,13 @@ type ProjectNameCache = {
   name: string;
 };
 
-type FooterBlockId =
-  | "cwd"
-  | "project"
-  | "git"
-  | "git-branch"
-  | "git-diff"
-  | "session-notes"
-  | "comms"
-  | "provider"
-  | "model"
-  | "thinking"
-  | "cost"
-  | "context";
-
-type ThinkingMode = "literal" | "blocks";
-
-type ThinkingConfig = {
-  mode: ThinkingMode;
-  mapping: Record<string, string>;
-};
-
-type ContextMode = "percent" | "bar" | "blocks";
-
-type ContextConfig = {
-  mode: ContextMode;
-  barWidth: number;
-};
-
-type RuntimeFooterConfig = {
-  left: string[];
-  right: string[];
-  separator: string;
-  truncate: number | null;
-  truncateBlocks: string[] | null;
-  thinking: ThinkingConfig;
-  context: ContextConfig;
-  branchStatusLine: boolean;
-};
-
 type FooterConfigCache = {
   cwd: string;
   projectTrusted: boolean;
   checkedAt: number;
   sourcePath: string | null;
   sourceMtimeMs: number | null;
-  config: RuntimeFooterConfig;
+  config: CompiledConfig;
   error?: string;
 };
 
@@ -246,48 +213,9 @@ function runtimeFooterConfigRoots(cwd: string, agentDir: string): RuntimeFooterC
   return { cwd, agentDir, configDirName: CONFIG_DIR_NAME };
 }
 
-const DEFAULT_LEFT_BLOCKS: FooterBlockId[] = ["cwd", "git-branch", "session-notes"];
-
-const DEFAULT_RIGHT_BLOCKS: FooterBlockId[] = ["provider", "model", "thinking", "cost", "context"];
-
-const KNOWN_BLOCKS = new Set<FooterBlockId>([...DEFAULT_LEFT_BLOCKS, ...DEFAULT_RIGHT_BLOCKS, "project", "git"]);
-const SEPARATOR_BLOCKS = new Set(["sep", "S"]);
-
-const THINKING_BLOCK_CHARS = new Set(["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]);
 const CONTEXT_BLOCK_GLYPHS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"] as const;
 const CONTEXT_BAR_FILLED = "█";
 const CONTEXT_BAR_EMPTY = "░";
-const DEFAULT_CONTEXT_BAR_WIDTH = 8;
-
-export const DEFAULT_THINKING_MAPPING: Record<string, string> = {
-  off: "▁",
-  minimal: "▂",
-  low: "▃",
-  medium: "▄",
-  high: "▅",
-  xhigh: "▆",
-  max: "█",
-};
-
-function defaultConfig(): RuntimeFooterConfig {
-  return {
-    left: [...DEFAULT_LEFT_BLOCKS],
-    right: [...DEFAULT_RIGHT_BLOCKS],
-    separator: " · ",
-    truncate: null,
-    truncateBlocks: null,
-    thinking: {
-      mode: "literal",
-      mapping: { ...DEFAULT_THINKING_MAPPING },
-    },
-    context: {
-      mode: "percent",
-      barWidth: DEFAULT_CONTEXT_BAR_WIDTH,
-    },
-    branchStatusLine: true,
-  };
-}
-
 function defaultConfigText(): string {
   return `{
   // Ordered block ids rendered on the left side.
@@ -304,7 +232,6 @@ function defaultConfigText(): string {
 
   // Optional list of block ids eligible for truncation.
   // Omit or set [] to allow truncation on all blocks.
-  // Special matching: "git" also matches "git-branch" and "git-diff".
   "truncateBlocks": [],
 
   // Thinking block formatting.
@@ -337,291 +264,22 @@ function defaultConfigText(): string {
   "branchStatusLine": true,
 
   // Available block ids:
-  // cwd, project, git-branch, git-diff, git, session-notes, comms, provider, model, thinking, cost, context
+  // cwd, project, git-branch, git-diff, session-notes, comms, provider, model, thinking, cost, context
   // status:<key> (any extension status key, e.g. status:kilo-usage-day)
   // Status values are normalized to one line; missing/empty values render nothing.
   // Empty status keys and duplicate placements are configuration errors.
   // session-notes aliases status:session-notes; status:branch-status requires branchStatusLine: false.
   // sep, S (explicit separator pseudo-block)
-  // text:<payload> or T:<payload> (inline literal block, e.g. text:foo or T:bar baz)
+  // text:<payload> uses ordinary spacing; T:<payload> manages its adjacent spacing.
   // ?text:<payload> / ?T:<payload> (show only when previous non-separator token renders non-empty)
   // !text:<payload> / !T:<payload> (show only when next non-separator token renders non-empty)
+  // Unknown tokens, including the removed git shorthand, are ignored.
 }
 `;
 }
 
 function normalizeTabs(text: string): string {
   return text.replace(/\t/g, "    ");
-}
-
-function parseExternalStatusKey(token: string): string | undefined {
-  if (!token.startsWith("status:")) return undefined;
-
-  const key = token.slice("status:".length).trim();
-  if (!key) {
-    throw new Error(`status block "${token}" must include a non-empty key`);
-  }
-  return key;
-}
-
-function statusIdentity(token: string): string | undefined {
-  if (token === "session-notes") return "session-notes";
-  return parseExternalStatusKey(token);
-}
-
-function validateStatusPlacements(config: RuntimeFooterConfig): void {
-  const placements = new Map<string, string>();
-  const addPlacement = (key: string, location: string) => {
-    const previous = placements.get(key);
-    if (previous) {
-      throw new Error(`duplicate extension status "${key}" at ${previous} and ${location}`);
-    }
-    placements.set(key, location);
-  };
-
-  for (const [side, tokens] of [
-    ["left", config.left],
-    ["right", config.right],
-  ] as const) {
-    tokens.forEach((token, index) => {
-      const key = statusIdentity(token);
-      if (key) addPlacement(key, `${side}[${index}]`);
-    });
-  }
-
-  if (config.branchStatusLine) {
-    addPlacement("branch-status", "branchStatusLine");
-  }
-}
-
-export function parseConfig(value: unknown): RuntimeFooterConfig | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const base = defaultConfig();
-  const data = value as {
-    left?: unknown;
-    right?: unknown;
-    separator?: unknown;
-    truncate?: unknown;
-    truncateBlocks?: unknown;
-    thinking?: unknown;
-    context?: unknown;
-    branchStatusLine?: unknown;
-  };
-
-  const parseSide = (side: unknown, fallback: string[]): string[] => {
-    if (!Array.isArray(side)) return fallback;
-    const parsed = side.filter((item): item is string => typeof item === "string");
-
-    // Backward compatibility: legacy "git" expands to separate branch+diff
-    // blocks so truncation can affect them independently.
-    const expanded: string[] = [];
-    for (const item of parsed) {
-      if (item === "git") {
-        expanded.push("git-branch", "git-diff");
-      } else {
-        expanded.push(item);
-      }
-    }
-
-    return expanded;
-  };
-
-  const parseThinkingConfig = (value: unknown): ThinkingConfig => {
-    if (!value || typeof value !== "object") {
-      return {
-        mode: base.thinking.mode,
-        mapping: { ...base.thinking.mapping },
-      };
-    }
-
-    const thinking = value as {
-      mode?: unknown;
-      mapping?: unknown;
-    };
-
-    const mode: ThinkingMode = thinking.mode === "blocks" ? "blocks" : base.thinking.mode;
-
-    const mapping: Record<string, string> = { ...base.thinking.mapping };
-    if (thinking.mapping && typeof thinking.mapping === "object") {
-      for (const [rawKey, rawValue] of Object.entries(thinking.mapping)) {
-        const key = rawKey.trim().toLowerCase();
-        if (!key || typeof rawValue !== "string") continue;
-        const glyph = rawValue.trim();
-        if (!THINKING_BLOCK_CHARS.has(glyph)) continue;
-        mapping[key] = glyph;
-      }
-    }
-
-    return { mode, mapping };
-  };
-
-  const parseContextConfig = (value: unknown): ContextConfig => {
-    if (!value || typeof value !== "object") {
-      return { ...base.context };
-    }
-
-    const context = value as {
-      mode?: unknown;
-      barWidth?: unknown;
-    };
-
-    const mode: ContextMode = context.mode === "bar" || context.mode === "blocks" ? context.mode : base.context.mode;
-
-    const barWidth =
-      typeof context.barWidth === "number" && Number.isFinite(context.barWidth) && context.barWidth >= 1
-        ? Math.floor(context.barWidth)
-        : base.context.barWidth;
-
-    return { mode, barWidth };
-  };
-
-  const parseTruncateBlocks = (value: unknown): string[] | null => {
-    if (!Array.isArray(value)) return null;
-    const blocks = value
-      .filter((item): item is string => typeof item === "string")
-      .map((item) => item.trim())
-      .filter((item) => item.length > 0);
-    return blocks.length > 0 ? blocks : null;
-  };
-
-  const config = {
-    left: parseSide(data.left, base.left),
-    right: parseSide(data.right, base.right),
-    separator: typeof data.separator === "string" ? normalizeTabs(data.separator) : base.separator,
-    truncate:
-      typeof data.truncate === "number" && Number.isFinite(data.truncate) && data.truncate >= 1
-        ? Math.floor(data.truncate)
-        : base.truncate,
-    truncateBlocks: parseTruncateBlocks(data.truncateBlocks),
-    thinking: parseThinkingConfig(data.thinking),
-    context: parseContextConfig(data.context),
-    branchStatusLine: typeof data.branchStatusLine === "boolean" ? data.branchStatusLine : base.branchStatusLine,
-  };
-  validateStatusPlacements(config);
-  return config;
-}
-
-/**
- * Lightweight JSONC support for runtime-footer config.
- *
- * Pi currently does not expose a public JSONC parser helper for extensions,
- * so this local parser keeps scope narrow: remove comments + trailing commas,
- * then parse as JSON.
- */
-function stripJsonComments(source: string): string {
-  let out = "";
-  let inString = false;
-  let escaped = false;
-  let inLineComment = false;
-  let inBlockComment = false;
-
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
-    const next = source[i + 1];
-
-    if (inLineComment) {
-      if (ch === "\n") {
-        inLineComment = false;
-        out += ch;
-      }
-      continue;
-    }
-
-    if (inBlockComment) {
-      if (ch === "*" && next === "/") {
-        inBlockComment = false;
-        i += 1;
-      }
-      continue;
-    }
-
-    if (inString) {
-      out += ch;
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      out += ch;
-      continue;
-    }
-
-    if (ch === "/" && next === "/") {
-      inLineComment = true;
-      i += 1;
-      continue;
-    }
-
-    if (ch === "/" && next === "*") {
-      inBlockComment = true;
-      i += 1;
-      continue;
-    }
-
-    out += ch;
-  }
-
-  return out;
-}
-
-/** Remove trailing commas outside string literals so JSON.parse can handle JSONC input. */
-function stripTrailingCommas(source: string): string {
-  let out = "";
-  let inString = false;
-  let escaped = false;
-
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
-
-    if (inString) {
-      out += ch;
-      if (escaped) {
-        escaped = false;
-      } else if (ch === "\\") {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-      out += ch;
-      continue;
-    }
-
-    if (ch === ",") {
-      let j = i + 1;
-      while (j < source.length && /\s/.test(source[j])) {
-        j += 1;
-      }
-      const next = source[j];
-      if (next === "]" || next === "}") {
-        continue;
-      }
-    }
-
-    out += ch;
-  }
-
-  return out;
-}
-
-function parseJsonOrJsonc(text: string): unknown {
-  const noComments = stripJsonComments(text);
-  const noTrailingCommas = stripTrailingCommas(noComments);
-  return JSON.parse(noTrailingCommas);
 }
 
 function readConfigMtime(pathname: string): number {
@@ -631,6 +289,10 @@ function readConfigMtime(pathname: string): number {
 function readConfigText(pathname: string): string {
   return readFileSync(pathname, "utf8");
 }
+
+const defaultConfigResult = compileConfig("{}", "json");
+if (!defaultConfigResult.ok) throw new Error(defaultConfigResult.error.message);
+const DEFAULT_COMPILED_CONFIG = defaultConfigResult.value;
 
 export function readFooterConfig(
   roots: RuntimeFooterConfigRoots,
@@ -642,7 +304,6 @@ export function readFooterConfig(
 ): FooterConfigCache {
   const now = Date.now();
   const { cwd } = roots;
-
   if (
     previous &&
     previous.cwd === cwd &&
@@ -653,51 +314,47 @@ export function readFooterConfig(
   }
 
   const source = resolveAutomaticConfigSource(roots, projectTrusted, fileExists);
-  const fallback = defaultConfig();
-
+  const fallback = DEFAULT_COMPILED_CONFIG;
   if (!source) {
-    return {
-      cwd,
-      projectTrusted,
-      checkedAt: now,
-      sourcePath: null,
-      sourceMtimeMs: null,
-      config: fallback,
-    };
+    return { cwd, projectTrusted, checkedAt: now, sourcePath: null, sourceMtimeMs: null, config: fallback };
   }
 
-  const sourcePath = source.path;
   let sourceMtimeMs: number | null;
   try {
-    sourceMtimeMs = readMtime(sourcePath);
+    sourceMtimeMs = readMtime(source.path);
   } catch {
     sourceMtimeMs = null;
   }
-
   if (
     previous &&
     previous.cwd === cwd &&
     previous.projectTrusted === projectTrusted &&
-    previous.sourcePath === sourcePath &&
+    previous.sourcePath === source.path &&
     previous.sourceMtimeMs === sourceMtimeMs
   ) {
     return { ...previous, checkedAt: now };
   }
 
   try {
-    const raw = parseJsonOrJsonc(readText(sourcePath));
-    const parsed = parseConfig(raw);
-    if (!parsed) {
-      throw new Error("config root must be an object");
+    const result = compileConfig(readText(source.path), source.format);
+    if (result.ok) {
+      return {
+        cwd,
+        projectTrusted,
+        checkedAt: now,
+        sourcePath: source.path,
+        sourceMtimeMs,
+        config: result.value,
+      };
     }
-
     return {
       cwd,
       projectTrusted,
       checkedAt: now,
-      sourcePath,
+      sourcePath: source.path,
       sourceMtimeMs,
-      config: parsed,
+      config: fallback,
+      error: `${source.path}: ${result.error.message}`,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -705,10 +362,10 @@ export function readFooterConfig(
       cwd,
       projectTrusted,
       checkedAt: now,
-      sourcePath,
+      sourcePath: source.path,
       sourceMtimeMs,
       config: fallback,
-      error: `${sourcePath}: ${message}`,
+      error: `${source.path}: ${message}`,
     };
   }
 }
@@ -881,7 +538,7 @@ type RenderBlockParams = {
   theme: ExtensionContext["ui"]["theme"];
   ctx: ExtensionContext;
   pi: RuntimeFooterThinkingApi;
-  config: RuntimeFooterConfig;
+  config: CompiledConfig;
   gitBranch: string | null;
   gitStats: GitStats | null;
   projectName: string;
@@ -907,15 +564,6 @@ function renderBlock(params: RenderBlockParams): FooterBlockText | undefined {
     case "project": {
       const plain = projectName;
       return { plain, styled: theme.fg("dim", plain), tone: "dim" };
-    }
-    case "git": {
-      if (!gitBranch) return undefined;
-      const statsPlain = formatGitStatsPlain(gitStats);
-      const statsStyled = formatGitStatsStyled(theme, gitStats);
-      const plain = statsPlain ? `${gitBranch} ${statsPlain}` : gitBranch;
-      const branch = theme.fg("dim", gitBranch);
-      const styled = statsStyled ? `${branch} ${statsStyled}` : branch;
-      return { plain, styled, tone: "dim" };
     }
     case "git-branch": {
       if (!gitBranch) return undefined;
@@ -986,16 +634,15 @@ function renderBlock(params: RenderBlockParams): FooterBlockText | undefined {
   }
 }
 
-function shouldTruncateBlock(blockId: string, truncateBlocks: string[] | null): boolean {
-  if (blockId === "sep" || blockId === "S") return false;
-  if (!truncateBlocks || truncateBlocks.length === 0) return true;
-
-  if (truncateBlocks.includes(blockId)) return true;
-  if (blockId === "git-branch" || blockId === "git-diff" || blockId === "git") {
-    return truncateBlocks.includes("git");
-  }
-
-  return false;
+function shouldTruncateToken(token: LayoutToken, truncateBlocks: string[] | null): boolean {
+  if (!truncateBlocks) return token.kind !== "separator";
+  const selector =
+    token.kind === "block"
+      ? token.blockId
+      : token.kind === "text" || token.kind === "status"
+        ? token.selector
+        : undefined;
+  return selector !== undefined && truncateBlocks.includes(selector);
 }
 
 function renderTruncatedBlock(
@@ -1006,121 +653,53 @@ function renderTruncatedBlock(
   if (block.preserveStyleOnTruncate) {
     return `${truncateToWidth(block.styled, maxWidth, "")}${theme.fg("dim", "… ")}`;
   }
-
   return theme.fg(block.tone, `${clipPlainTextToWidth(block.plain, maxWidth)}… `);
 }
 
-function isSeparatorToken(token: string): boolean {
-  return SEPARATOR_BLOCKS.has(token);
-}
-
-type InlineTextCondition = "none" | "prev" | "next";
-
-type ParsedInlineTextToken = {
-  payload: string;
-  aliasSpacingManaged: boolean;
-  condition: InlineTextCondition;
-};
-
-function parseInlineTextToken(token: string): ParsedInlineTextToken | null {
-  let condition: InlineTextCondition = "none";
-  let source = token;
-
-  if (source.startsWith("?")) {
-    condition = "prev";
-    source = source.slice(1);
-  } else if (source.startsWith("!")) {
-    condition = "next";
-    source = source.slice(1);
-  }
-
-  if (!(source.startsWith("text:") || source.startsWith("T:"))) return null;
-
-  const aliasSpacingManaged = source.startsWith("T:");
-  const payload = aliasSpacingManaged ? source.slice("T:".length) : source.slice("text:".length);
-
-  return { payload, aliasSpacingManaged, condition };
-}
-
-function isInlineTextToken(token: string): boolean {
-  return parseInlineTextToken(token) !== null;
-}
-
-function isInlineTextAliasToken(token: string): boolean {
-  const parsed = parseInlineTextToken(token);
-  return parsed?.aliasSpacingManaged === true;
-}
-
-export function renderExternalStatusToken(
-  token: string,
-  statuses: ReadonlyMap<string, string>,
-): FooterBlockText | undefined {
-  const key = parseExternalStatusKey(token);
-  if (!key) return undefined;
-
+function renderStatus(key: string, statuses: ReadonlyMap<string, string>): FooterBlockText | undefined {
   const value = statuses.get(key);
   if (!value) return undefined;
-
   const styled = value
     .replace(/[\r\n\t]/g, " ")
     .replace(/ +/g, " ")
     .trim();
   const plain = stripTerminalSequences(styled);
-  if (!plain.trim()) return undefined;
-
-  return {
-    plain,
-    styled,
-    tone: "dim",
-    preserveStyleOnTruncate: true,
-  };
+  return plain.trim() ? { plain, styled, tone: "dim", preserveStyleOnTruncate: true } : undefined;
 }
 
-function renderInlineTextToken(token: string, theme: ExtensionContext["ui"]["theme"]): FooterBlockText | undefined {
-  const parsed = parseInlineTextToken(token);
-  if (!parsed) return undefined;
-  if (parsed.payload.trim().length === 0) return undefined;
-  return {
-    plain: parsed.payload,
-    styled: theme.fg("dim", parsed.payload),
-    tone: "dim",
-  };
-}
-
-function shouldRenderInlineByCondition(
-  token: string,
-  index: number,
-  blockIds: string[],
-  hasRenderableTokenAt: (index: number) => boolean,
-): boolean {
-  const parsed = parseInlineTextToken(token);
-  if (!parsed) return false;
-
-  if (parsed.condition === "none") return true;
-
-  const step = parsed.condition === "prev" ? -1 : 1;
-  let cursor = index + step;
-
-  while (cursor >= 0 && cursor < blockIds.length) {
-    if (isSeparatorToken(blockIds[cursor])) {
-      cursor += step;
-      continue;
-    }
-    return hasRenderableTokenAt(cursor);
+function renderToken(token: LayoutToken, params: Omit<RenderBlockParams, "blockId">): FooterBlockText | undefined {
+  if (token.kind === "block") return renderBlock({ ...params, blockId: token.blockId });
+  if (token.kind === "status") return renderStatus(token.key, params.statuses);
+  if (token.kind === "text" && token.payload.trim()) {
+    return { plain: token.payload, styled: params.theme.fg("dim", token.payload), tone: "dim" };
   }
+  return undefined;
+}
 
+function conditionAllows(
+  token: LayoutToken,
+  index: number,
+  tokens: readonly LayoutToken[],
+  rendered: readonly (FooterBlockText | undefined)[],
+): boolean {
+  if (token.kind !== "text" || token.condition === "none") return true;
+  const step = token.condition === "prev" ? -1 : 1;
+  for (let cursor = index + step; cursor >= 0 && cursor < tokens.length; cursor += step) {
+    if (tokens[cursor]?.kind === "separator") continue;
+    return Boolean(rendered[cursor]?.plain.trim());
+  }
   return false;
 }
 
 export function renderSide(
-  blockIds: string[],
+  tokens: readonly LayoutToken[],
   separator: string,
   truncate: number | null,
   truncateBlocks: string[] | null,
   theme: ExtensionContext["ui"]["theme"],
   ctx: ExtensionContext,
   pi: RuntimeFooterThinkingApi,
-  config: RuntimeFooterConfig,
+  config: CompiledConfig,
   gitBranch: string | null,
   gitStats: GitStats | null,
   projectName: string,
@@ -1128,103 +707,35 @@ export function renderSide(
   commsActive: boolean,
   explicitSeparatorMode: boolean,
 ): string {
-  const explicitSeparators = blockIds.some(isSeparatorToken);
+  const params = { theme, ctx, pi, config, gitBranch, gitStats, projectName, statuses, commsActive };
+  const rendered = tokens.map((token) => renderToken(token, params));
+  const explicitSeparators = explicitSeparatorMode;
   const renderedSeparator = theme.fg("dim", normalizeTabs(separator));
-
-  if (!explicitSeparatorMode && !explicitSeparators) {
-    const parts: string[] = [];
-
-    for (const rawBlockId of blockIds) {
-      const block = KNOWN_BLOCKS.has(rawBlockId as FooterBlockId)
-        ? renderBlock({
-            blockId: rawBlockId as FooterBlockId,
-            theme,
-            ctx,
-            pi,
-            config,
-            gitBranch,
-            gitStats,
-            projectName,
-            statuses,
-            commsActive,
-          })
-        : (renderExternalStatusToken(rawBlockId, statuses) ?? renderInlineTextToken(rawBlockId, theme));
-
-      if (block) {
-        if (truncate && shouldTruncateBlock(rawBlockId, truncateBlocks) && visibleWidth(block.plain) > truncate) {
-          parts.push(renderTruncatedBlock(block, truncate, theme));
-        } else {
-          parts.push(block.styled);
-        }
-      }
-    }
-
-    return parts.join(renderedSeparator);
-  }
-
   const parts: string[] = [];
   let pendingSeparator = false;
-  let previousWasSpacingManaged = false;
+  let previousSpacing: "normal" | "managed" = "normal";
 
-  const renderedTokens = blockIds.map((token) => {
-    const block = KNOWN_BLOCKS.has(token as FooterBlockId)
-      ? renderBlock({
-          blockId: token as FooterBlockId,
-          theme,
-          ctx,
-          pi,
-          config,
-          gitBranch,
-          gitStats,
-          projectName,
-          statuses,
-          commsActive,
-        })
-      : (renderExternalStatusToken(token, statuses) ?? renderInlineTextToken(token, theme));
-    return { token, block };
-  });
-
-  const hasRenderableTokenAt = (index: number): boolean => {
-    const entry = renderedTokens[index];
-    if (!entry || !entry.block) return false;
-    return entry.block.plain.trim().length > 0;
-  };
-
-  for (let index = 0; index < blockIds.length; index += 1) {
-    const token = blockIds[index];
-
-    if (isSeparatorToken(token)) {
-      if (parts.length > 0) pendingSeparator = true;
+  for (const [index, token] of tokens.entries()) {
+    if (token.kind === "separator") {
+      if (explicitSeparators && parts.length > 0) pendingSeparator = true;
       continue;
     }
-
-    const block = renderedTokens[index]?.block;
-    if (!block) continue;
-
-    if (isInlineTextToken(token) && !shouldRenderInlineByCondition(token, index, blockIds, hasRenderableTokenAt)) {
-      continue;
-    }
-
-    const spacingManaged = isInlineTextAliasToken(token);
-
-    const renderedBlock =
-      truncate && shouldTruncateBlock(token, truncateBlocks) && visibleWidth(block.plain) > truncate
+    const block = rendered[index];
+    if (!block || !conditionAllows(token, index, tokens, rendered)) continue;
+    const textSpacing = token.kind === "text" ? token.spacing : "normal";
+    const value =
+      truncate && shouldTruncateToken(token, truncateBlocks) && visibleWidth(block.plain) > truncate
         ? renderTruncatedBlock(block, truncate, theme)
         : block.styled;
-
     if (parts.length > 0) {
-      if (pendingSeparator) {
-        parts.push(renderedSeparator);
-      } else if (!previousWasSpacingManaged && !spacingManaged) {
-        parts.push(" ");
-      }
+      if (!explicitSeparators) parts.push(renderedSeparator);
+      else if (pendingSeparator) parts.push(renderedSeparator);
+      else if (previousSpacing === "normal" && textSpacing === "normal") parts.push(" ");
     }
-
-    parts.push(renderedBlock);
+    parts.push(value);
     pendingSeparator = false;
-    previousWasSpacingManaged = spacingManaged;
+    previousSpacing = textSpacing;
   }
-
   return parts.join("");
 }
 
@@ -1406,19 +917,16 @@ export function registerRuntimeFooterExtension(
             lastConfigError = undefined;
           }
 
-          const usesGit =
-            configCache.config.left.includes("git") ||
-            configCache.config.right.includes("git") ||
-            configCache.config.left.includes("git-branch") ||
-            configCache.config.left.includes("git-diff") ||
-            configCache.config.right.includes("git-branch") ||
-            configCache.config.right.includes("git-diff");
+          const usesGit = [...configCache.config.left, ...configCache.config.right].some(
+            (token) => token.kind === "block" && (token.blockId === "git-branch" || token.blockId === "git-diff"),
+          );
           if (usesGit) {
             gitStatsCache = getGitStats(gitStatsCache);
           }
 
-          const usesProject =
-            configCache.config.left.includes("project") || configCache.config.right.includes("project");
+          const usesProject = [...configCache.config.left, ...configCache.config.right].some(
+            (token) => token.kind === "block" && token.blockId === "project",
+          );
           if (usesProject) {
             projectNameCache = getProjectName(projectNameCache);
           }
@@ -1427,9 +935,9 @@ export function registerRuntimeFooterExtension(
           const gitBranch = footerData.getGitBranch();
           const gitStats = usesGit ? (gitStatsCache?.stats ?? null) : null;
           const projectName = usesProject ? (projectNameCache?.name ?? computeProjectName()) : "";
-
-          const explicitSeparatorMode =
-            configCache.config.left.some(isSeparatorToken) || configCache.config.right.some(isSeparatorToken);
+          const explicitSeparatorMode = [...configCache.config.left, ...configCache.config.right].some(
+            (token) => token.kind === "separator",
+          );
 
           const left = renderSide(
             configCache.config.left,

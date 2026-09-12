@@ -3,6 +3,14 @@ import { defineConfig } from "oxlint";
 export default defineConfig({
   ignorePatterns: [".pi/**", "tools/oxlint/anti-slop/**"],
   jsPlugins: [{ name: "anti-slop", specifier: "./tools/oxlint/anti-slop/index.ts" }],
+  overrides: [
+    {
+      files: ["extensions/shared/runtime-footer-config.ts"],
+      rules: {
+        "anti-slop/no-runtime-typeof": ["error", { allowInTypeGuards: true }],
+      },
+    },
+  ],
   rules: {
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",

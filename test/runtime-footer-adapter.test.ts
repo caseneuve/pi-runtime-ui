@@ -5,7 +5,7 @@ import type {
   SessionStartEvent,
   SessionTreeEvent,
 } from "@earendil-works/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   type RuntimeFooterExtensionApi,
@@ -132,6 +132,11 @@ function createContext(projectTrusted: boolean, onNotify: (message: string) => v
     ui,
   } as ExtensionContext;
 
+  Object.defineProperties(context, {
+    getContextUsage: { value: () => undefined },
+    sessionManager: { value: { getBranch: () => [] } },
+  });
+
   return Object.assign(context, {
     getFooterFactory: () => {
       if (!footerFactory) throw new Error("expected a footer factory");
@@ -195,6 +200,69 @@ describe("runtime-footer extension adapters", () => {
     for (const legacyPath of legacyPaths()) {
       expect([...recorder.existenceProbes, ...recorder.statProbes, ...recorder.readProbes]).not.toContain(legacyPath);
     }
+  });
+
+  it("passes selected JSON format to the compiler, falls back on errors, and notifies each error episode once", () => {
+    vi.useFakeTimers();
+    try {
+      const globalJson = configPath("global", "config.json");
+      const notifications: string[] = [];
+      let sourceText = '{ // JSON comments are invalid here\n "left": [] }';
+      let revision = 1;
+      const effects: RuntimeFooterExtensionEffects = {
+        getAgentDir: () => agentDir,
+        fileExists: (pathname) => pathname === globalJson,
+        readMtime: () => revision,
+        readText: () => sourceText,
+        ensureConfigFile: () => {},
+        openConfigInEditor: async () => ({ ok: true, message: "opened" }),
+      };
+      const adapter = createAdapter(effects);
+      const context = createContext(false, (message) => notifications.push(message));
+      if (!adapter.sessionStart) throw new Error("expected session_start handler");
+
+      adapter.sessionStart({ type: "session_start", reason: "startup" }, context);
+      renderCapturedFooter(context);
+      renderCapturedFooter(context);
+
+      sourceText = '{"left":[],"right":[],"branchStatusLine":false}';
+      revision += 1;
+      vi.advanceTimersByTime(1001);
+      renderCapturedFooter(context);
+
+      sourceText = '{ // JSON comments are invalid here\n "left": [] }';
+      revision += 1;
+      vi.advanceTimersByTime(1001);
+      renderCapturedFooter(context);
+
+      expect(notifications).toHaveLength(2);
+      expect(notifications[0]).toContain(globalJson);
+      expect(notifications[1]).toContain(globalJson);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses defaults and notifies when the selected config file cannot be read", () => {
+    const globalJsonc = configPath("global", "config.jsonc");
+    const notifications: string[] = [];
+    const effects: RuntimeFooterExtensionEffects = {
+      getAgentDir: () => agentDir,
+      fileExists: (pathname) => pathname === globalJsonc,
+      readMtime: () => 1,
+      readText: () => {
+        throw new Error("permission denied");
+      },
+      ensureConfigFile: () => {},
+      openConfigInEditor: async () => ({ ok: true, message: "opened" }),
+    };
+    const adapter = createAdapter(effects);
+    const context = createContext(false, (message) => notifications.push(message));
+    if (!adapter.sessionStart) throw new Error("expected session_start handler");
+
+    adapter.sessionStart({ type: "session_start", reason: "startup" }, context);
+    expect(() => renderCapturedFooter(context)).not.toThrow();
+    expect(notifications).toEqual([expect.stringContaining("permission denied")]);
   });
 
   it("limits an untrusted local command to canonical project candidates and reports trust", async () => {

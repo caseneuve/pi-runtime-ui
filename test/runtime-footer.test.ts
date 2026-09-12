@@ -1,53 +1,22 @@
 import path from "node:path";
-import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 
 import {
-  DEFAULT_THINKING_MAPPING,
-  parseConfig,
   planAutomaticConfigCandidates,
   planEditConfigCandidates,
   planRuntimeFooterConfigEdit,
   readFooterConfig,
-  renderExternalStatusToken,
-  renderSide,
   runtimeFooterConfigCommandCompletions,
   selectFirstExistingConfigCandidate,
   shortenModelId,
   thinkingBlockTone,
 } from "../extensions/runtime-footer";
+import { compileConfig, DEFAULT_THINKING_MAPPING, type JsonValue } from "../extensions/shared/runtime-footer-config";
 
-const identityTheme = {
-  fg: (_tone: string, text: string) => text,
-};
-
-function renderStatusSide(tokens: string[], explicitSeparatorMode: boolean): string {
-  const config = parseConfig({
-    left: tokens,
-    right: [],
-    separator: " | ",
-    truncate: 4,
-    truncateBlocks: ["status:kilo"],
-    branchStatusLine: false,
-  });
-  if (!config) throw new Error("expected valid test config");
-
-  return renderSide(
-    config.left,
-    config.separator,
-    config.truncate,
-    config.truncateBlocks,
-    identityTheme as never,
-    {} as never,
-    {} as never,
-    config,
-    null,
-    null,
-    "",
-    new Map([["kilo", "\x1b]8;;https://example.com\x07\x1b[31mabcdef\x1b[0m\x1b]8;;\x07"]]),
-    false,
-    explicitSeparatorMode,
-  );
+function parseConfig(value: JsonValue) {
+  const result = compileConfig(JSON.stringify(value), "json");
+  if (!result.ok) throw new Error(result.error.message);
+  return result.value;
 }
 
 const configRoots = {
@@ -392,77 +361,14 @@ describe("runtime-footer explicit config editing", () => {
   });
 });
 
-describe("runtime-footer external statuses", () => {
-  it("resolves a named extension status and preserves its styling", () => {
-    const styled = "\x1b[32m42%\x1b[39m";
-    const statuses = new Map([["kilo-usage-day", styled]]);
-
-    expect(renderExternalStatusToken("status: kilo-usage-day ", statuses)).toEqual({
-      plain: "42%",
-      styled,
-      tone: "dim",
-      preserveStyleOnTruncate: true,
-    });
-  });
-
-  it("normalizes control whitespace and strips OSC/APC sequences from plain text", () => {
-    const styled = "\x1b]8;;https://example.com\x07ready\r\n\t now\x1b]8;;\x07\x1b_pi-marker\x1b\\";
-    const result = renderExternalStatusToken("status:link", new Map([["link", styled]]));
-
-    expect(result?.plain).toBe("ready now");
-    expect(stripTerminalSequences(result?.styled ?? "")).toBe("ready now");
-    expect(result?.styled).toContain("\x1b]8;;https://example.com\x07");
-  });
-
-  it("ignores missing, empty, and styled-whitespace-only statuses", () => {
-    const statuses = new Map([
-      ["empty", ""],
-      ["spaces", "\x1b[31m \r\n\t \x1b[0m"],
-    ]);
-
-    expect(renderExternalStatusToken("provider", statuses)).toBeUndefined();
-    expect(renderExternalStatusToken("status:missing", statuses)).toBeUndefined();
-    expect(renderExternalStatusToken("status:empty", statuses)).toBeUndefined();
-    expect(renderExternalStatusToken("status:spaces", statuses)).toBeUndefined();
-  });
-
-  it("reflects status appearance, updates, and clearing", () => {
-    const statuses = new Map<string, string>();
-
-    expect(renderExternalStatusToken("status:hotl", statuses)).toBeUndefined();
-    statuses.set("hotl", "running 2");
-    expect(renderExternalStatusToken("status:hotl", statuses)?.plain).toBe("running 2");
-    statuses.set("hotl", "done 2");
-    expect(renderExternalStatusToken("status:hotl", statuses)?.plain).toBe("done 2");
-    statuses.delete("hotl");
-    expect(renderExternalStatusToken("status:hotl", statuses)).toBeUndefined();
-  });
-
-  it.each([
-    ["implicit", ["status:kilo", "text:tail"], false],
-    ["explicit", ["status:kilo", "sep", "text:tail"], true],
-  ])("preserves status styling during %s-separator truncation", (_mode, tokens, explicit) => {
-    const rendered = renderStatusSide(tokens as string[], explicit as boolean);
-    const plain = stripTerminalSequences(rendered);
-
-    expect(plain).toContain("abcd… ");
-    expect(plain).not.toContain("abcde");
-    expect(visibleWidth(rendered)).toBe(visibleWidth(plain));
-    expect(rendered).toContain("\x1b]8;;https://example.com\x07");
-    expect(rendered).toContain("\x1b]8;;\x07");
-    expect(rendered).toContain("\x1b[31m");
-    expect(rendered).toContain("\x1b[0m");
-  });
-});
-
 describe("runtime-footer status placement validation", () => {
   it("rejects malformed status tokens", () => {
     expect(() => parseConfig({ left: ["status:"], right: [] })).toThrow(/non-empty key/);
   });
 
   it("allows a well-formed status before its producer appears", () => {
-    expect(parseConfig({ left: ["status:not-running"], right: [], branchStatusLine: false })?.left).toEqual([
-      "status:not-running",
+    expect(parseConfig({ left: ["status:not-running"], right: [], branchStatusLine: false }).left).toEqual([
+      { kind: "status", selector: "status:not-running", key: "not-running" },
     ]);
   });
 

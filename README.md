@@ -33,11 +33,12 @@ the root of a Pi configuration directory. Its canonical candidates are:
 | Global | `<getAgentDir()>/extensions/runtime-footer/config.jsonc`, then `config.json` in that directory (normally `~/.pi/agent/extensions/runtime-footer/`) |
 
 `CONFIG_DIR_NAME` is Pi's project configuration directory name (normally
-`.pi`); `getAgentDir()` is Pi's resolved global agent directory. JSONC and JSON
-are both current supported formats. JSONC has precedence over JSON within each
-scope, and a trusted project source has precedence over a global source. The
-first existing candidate is authoritative: if it is malformed, runtime-footer
-reports the error and uses defaults instead of falling through to another file.
+`.pi`); `getAgentDir()` is Pi's resolved global agent directory. `.json` is
+strict JSON. `.jsonc` additionally accepts comments and trailing commas. JSONC
+has precedence over JSON within each scope, and a trusted project source has
+precedence over a global source. The first existing candidate is authoritative:
+if it is malformed, runtime-footer reports the error and uses defaults instead
+of falling through to another file.
 
 Automatic loading honors Pi project trust. When the current project is trusted,
 runtime-footer checks project candidates before global candidates. When it is
@@ -84,9 +85,12 @@ For a rebranded Pi distribution, substitute its `CONFIG_DIR_NAME` and resolved
 
 The default layout is left `cwd`, `git-branch`, `session-notes` and right
 `provider`, `model`, `thinking`, `cost`, `context`. Available block IDs are
-`cwd`, `project`, `git-branch`, `git-diff`, `git`, `session-notes`, `comms`,
-`provider`, `model`, `thinking`, `cost`, and `context`. `git` is the legacy
-alias that expands to `git-branch` and `git-diff`.
+`cwd`, `project`, `git-branch`, `git-diff`, `session-notes`, `comms`,
+`provider`, `model`, `thinking`, `cost`, and `context`.
+
+**Breaking:** the legacy `git` shorthand has been removed. Use explicit
+`git-branch` and `git-diff` blocks instead. `git` is now an unknown token and
+renders nothing.
 
 `status:<key>` renders any non-empty value another extension publishes with
 `ctx.ui.setStatus(<key>, value)`. Values are normalized to one display line;
@@ -101,19 +105,24 @@ the legacy second line.
 `sep` and `S` are explicit separator pseudo-blocks. When either side contains
 one, both sides use explicit separator placement; otherwise the configured
 separator (default ` · `) is inserted implicitly between rendered blocks.
-`text:<payload>` and `T:<payload>` render inline literals. In
-explicit-separator mode, `T:` is spacing-managed and receives no implicit
-baseline spaces, while `text:` receives the baseline spacing used for ordinary
-blocks; ordinary blocks retain that baseline spacing in explicit mode.
-For example, `"left": ["cwd", "sep", "T:(local)", "project"]` places the
-literal tightly after the configured separator. Prefix a literal with `?` to
-render it only after a non-empty previous non-separator block, or with `!` to
-render it only before a non-empty next block. Empty literal payloads and
-unknown block IDs are ignored.
+
+Inline literals deliberately have two spacing forms:
+
+- `text:<payload>` has ordinary block spacing.
+- `T:<payload>` manages its adjacent spacing, so it can join text tightly in
+  explicit-separator layouts.
+
+All literal forms are retained: `text:`, `T:`, `?text:`, `!text:`, `?T:`, and
+`!T:`. `?` requires a non-empty previous non-separator token; `!` requires a
+non-empty next non-separator token. Unknown tokens retain their position for
+these conditional checks but render nothing. For example,
+`"left": ["cwd", "sep", "T:(local)", "project"]` places the literal tightly
+after the configured separator. Empty literal payloads render nothing.
 
 `truncate` sets a minimum-one visible-width limit (or `null` to disable it),
-and optional `truncateBlocks` limits that behavior to named blocks. `git` in
-`truncateBlocks` also matches `git-branch` and `git-diff`. `thinking.mode` is
+and optional `truncateBlocks` limits that behavior to exact block or DSL
+selectors. `git` in `truncateBlocks` has no special meaning and does not match
+`git-branch` or `git-diff`. `thinking.mode` is
 `literal` (default) or `blocks` with the level-to-glyph `thinking.mapping`;
 `context.mode` is `percent` (default), `bar`, or `blocks`, and
 `context.barWidth` controls bar width. `branchStatusLine` defaults to `true`.
