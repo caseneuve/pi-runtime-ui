@@ -1,6 +1,6 @@
 ---
 title: install anti slop oxlint rules
-status: in_progress
+status: done
 priority: medium
 type: chore
 labels: []
