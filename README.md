@@ -24,16 +24,63 @@ plugin, or cross-package integration API.
 
 ## Runtime footer configuration
 
-`runtime-footer` looks for configuration in this order:
+`runtime-footer` stores its configuration alongside Pi extension resources, not at
+the root of a Pi configuration directory. Its canonical candidates are:
 
-1. `.pi/runtime-footer.jsonc`
-2. `.pi/runtime-footer.json` (legacy)
-3. `~/.pi/agent/runtime-footer.jsonc`
-4. `~/.pi/agent/runtime-footer.json` (legacy)
+| Scope | Canonical candidates, in order |
+| --- | --- |
+| Project | `<cwd>/<CONFIG_DIR_NAME>/extensions/runtime-footer/config.jsonc`, then `config.json` in that directory |
+| Global | `<getAgentDir()>/extensions/runtime-footer/config.jsonc`, then `config.json` in that directory (normally `~/.pi/agent/extensions/runtime-footer/`) |
 
-Use `/runtime-footer-config` to create/edit the global JSONC file, or
-`/runtime-footer-config local` for the project file. The command requires
-`$VISUAL` or `$EDITOR`; `project` remains a compatibility alias for `local`.
+`CONFIG_DIR_NAME` is Pi's project configuration directory name (normally
+`.pi`); `getAgentDir()` is Pi's resolved global agent directory. JSONC and JSON
+are both current supported formats. JSONC has precedence over JSON within each
+scope, and a trusted project source has precedence over a global source. The
+first existing candidate is authoritative: if it is malformed, runtime-footer
+reports the error and uses defaults instead of falling through to another file.
+
+Automatic loading honors Pi project trust. When the current project is trusted,
+runtime-footer checks project candidates before global candidates. When it is
+untrusted, it neither probes nor reads project candidates; global configuration
+remains available.
+
+Use `/runtime-footer-config` to create or edit the global configuration, or
+`/runtime-footer-config local` for the project configuration. The command
+prefers an existing canonical JSONC file, then canonical JSON, and otherwise
+creates canonical JSONC. It requires `$VISUAL` or `$EDITOR`. Its only accepted
+modes are `global` and `local`; the former `project` alias is no longer
+accepted.
+
+An explicit `/runtime-footer-config local` may inspect and create canonical
+project files even for an untrusted project. It reports the resolved project
+path, but that configuration is not consumed in the current untrusted session;
+trust the project and restart Pi, then it loads automatically on the next
+startup.
+
+### Manual migration from the removed root-level paths
+
+Runtime support for the removed root-level project paths
+`<cwd>/<CONFIG_DIR_NAME>/runtime-footer.jsonc` and `runtime-footer.json`, and
+the corresponding global paths `<getAgentDir()>/runtime-footer.jsonc` and
+`runtime-footer.json`, has been removed: they are not read, probed, or
+automatically migrated. Move an existing file yourself. For example, in a
+standard Pi project, migrate JSONC with:
+
+```bash
+mkdir -p .pi/extensions/runtime-footer
+mv .pi/runtime-footer.jsonc .pi/extensions/runtime-footer/config.jsonc
+```
+
+For JSON, use `config.json` as the destination instead. To migrate the
+standard global JSONC file, run:
+
+```bash
+mkdir -p ~/.pi/agent/extensions/runtime-footer
+mv ~/.pi/agent/runtime-footer.jsonc ~/.pi/agent/extensions/runtime-footer/config.jsonc
+```
+
+For a rebranded Pi distribution, substitute its `CONFIG_DIR_NAME` and resolved
+`getAgentDir()` location for `.pi` and `~/.pi/agent`.
 
 The default layout is left `cwd`, `git-branch`, `session-notes` and right
 `provider`, `model`, `thinking`, `cost`, `context`. Available block IDs are

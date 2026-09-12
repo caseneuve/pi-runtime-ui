@@ -2,7 +2,14 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { type ExtensionAPI, type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  CONFIG_DIR_NAME,
+  type ExtensionAPI,
+  type ExtensionContext,
+  getAgentDir,
+  type SessionStartEvent,
+  type SessionTreeEvent,
+} from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { openExternalEditor } from "./shared/external-editor";
 import {
@@ -19,10 +26,6 @@ const CONFIG_CHECK_TTL_MS = 1000;
 
 const COMMAND_NAME = "runtime-footer-config";
 const CONFIG_CHANGED_EVENT = "runtime-footer:config-changed";
-const PROJECT_CONFIG_RELATIVE_PATH_JSONC = ".pi/runtime-footer.jsonc";
-const PROJECT_CONFIG_RELATIVE_PATH_JSON = ".pi/runtime-footer.json";
-const GLOBAL_CONFIG_PATH_JSONC = path.join(getAgentDir(), "runtime-footer.jsonc");
-const GLOBAL_CONFIG_PATH_JSON = path.join(getAgentDir(), "runtime-footer.json");
 
 type ProjectNameCache = {
   cwd: string;
@@ -71,12 +74,177 @@ type RuntimeFooterConfig = {
 
 type FooterConfigCache = {
   cwd: string;
+  projectTrusted: boolean;
   checkedAt: number;
   sourcePath: string | null;
   sourceMtimeMs: number | null;
   config: RuntimeFooterConfig;
   error?: string;
 };
+
+export type RuntimeFooterConfigScope = "project" | "global";
+
+export type RuntimeFooterConfigFormat = "jsonc" | "json";
+
+export type RuntimeFooterConfigRoots = {
+  cwd: string;
+  agentDir: string;
+  configDirName: string;
+};
+
+export type RuntimeFooterConfigCandidate = {
+  scope: RuntimeFooterConfigScope;
+  format: RuntimeFooterConfigFormat;
+  path: string;
+};
+
+export type RuntimeFooterConfigExistenceFact = {
+  path: string;
+  exists: boolean;
+};
+
+const RUNTIME_FOOTER_CONFIG_FORMATS = ["jsonc", "json"] as const;
+
+export type RuntimeFooterConfigEditMode = "global" | "local";
+
+export type RuntimeFooterConfigEditPlan =
+  | {
+      kind: "invalid";
+      usage: string;
+    }
+  | {
+      kind: "edit";
+      target: RuntimeFooterConfigCandidate;
+      notice: string | undefined;
+    };
+
+export type RuntimeFooterConfigCommandCompletion = {
+  label: RuntimeFooterConfigEditMode;
+  value: RuntimeFooterConfigEditMode;
+  description: string;
+};
+
+const RUNTIME_FOOTER_CONFIG_COMMAND_USAGE = "Usage: /runtime-footer-config [global|local]";
+const RUNTIME_FOOTER_CONFIG_COMMAND_COMPLETIONS: readonly RuntimeFooterConfigCommandCompletion[] = [
+  {
+    label: "global",
+    value: "global",
+    description: "edit the global runtime-footer config",
+  },
+  {
+    label: "local",
+    value: "local",
+    description: "edit the project runtime-footer config",
+  },
+];
+
+function configFilename(format: RuntimeFooterConfigFormat): "config.jsonc" | "config.json" {
+  return format === "jsonc" ? "config.jsonc" : "config.json";
+}
+
+function planConfigCandidatesForScope(
+  roots: RuntimeFooterConfigRoots,
+  scope: RuntimeFooterConfigScope,
+): RuntimeFooterConfigCandidate[] {
+  const configRoot = scope === "project" ? path.join(roots.cwd, roots.configDirName) : roots.agentDir;
+
+  return RUNTIME_FOOTER_CONFIG_FORMATS.map((format) => ({
+    scope,
+    format,
+    path: path.join(configRoot, "extensions", "runtime-footer", configFilename(format)),
+  }));
+}
+
+export function planAutomaticConfigCandidates(
+  roots: RuntimeFooterConfigRoots,
+  projectTrusted: boolean,
+): RuntimeFooterConfigCandidate[] {
+  const globalCandidates = planConfigCandidatesForScope(roots, "global");
+  if (!projectTrusted) return globalCandidates;
+
+  return [...planConfigCandidatesForScope(roots, "project"), ...globalCandidates];
+}
+
+export function planEditConfigCandidates(
+  roots: RuntimeFooterConfigRoots,
+  scope: RuntimeFooterConfigScope,
+): RuntimeFooterConfigCandidate[] {
+  return planConfigCandidatesForScope(roots, scope);
+}
+
+export function selectFirstExistingConfigCandidate(
+  candidates: readonly RuntimeFooterConfigCandidate[],
+  existenceFacts: readonly RuntimeFooterConfigExistenceFact[],
+): RuntimeFooterConfigCandidate | undefined {
+  const existingPaths = new Set(existenceFacts.filter((fact) => fact.exists).map((fact) => fact.path));
+  return candidates.find((candidate) => existingPaths.has(candidate.path));
+}
+
+type ConfigFileExists = (pathname: string) => boolean;
+type ConfigFileMtime = (pathname: string) => number;
+type ConfigFileText = (pathname: string) => string;
+
+function collectExistenceFacts(
+  candidates: readonly RuntimeFooterConfigCandidate[],
+  fileExists: ConfigFileExists,
+): RuntimeFooterConfigExistenceFact[] {
+  const facts: RuntimeFooterConfigExistenceFact[] = [];
+  for (const candidate of candidates) {
+    const exists = fileExists(candidate.path);
+    facts.push({ path: candidate.path, exists });
+    if (exists) break;
+  }
+  return facts;
+}
+
+export function resolveAutomaticConfigSource(
+  roots: RuntimeFooterConfigRoots,
+  projectTrusted: boolean,
+  fileExists: ConfigFileExists,
+): RuntimeFooterConfigCandidate | undefined {
+  const candidates = planAutomaticConfigCandidates(roots, projectTrusted);
+  const existenceFacts = collectExistenceFacts(candidates, fileExists);
+  return selectFirstExistingConfigCandidate(candidates, existenceFacts);
+}
+
+export function runtimeFooterConfigCommandCompletions(prefix: string): RuntimeFooterConfigCommandCompletion[] | null {
+  const normalized = prefix.trim().toLowerCase();
+  const completions = RUNTIME_FOOTER_CONFIG_COMMAND_COMPLETIONS.filter((completion) =>
+    completion.value.startsWith(normalized),
+  );
+  return completions.length > 0 ? completions : null;
+}
+
+export function planRuntimeFooterConfigEdit(
+  args: string,
+  roots: RuntimeFooterConfigRoots,
+  projectTrusted: boolean,
+  fileExists: ConfigFileExists,
+): RuntimeFooterConfigEditPlan {
+  const modeRaw = args.trim();
+  const mode: RuntimeFooterConfigEditMode | undefined =
+    modeRaw === "" ? "global" : modeRaw === "global" || modeRaw === "local" ? modeRaw : undefined;
+  if (!mode) return { kind: "invalid", usage: RUNTIME_FOOTER_CONFIG_COMMAND_USAGE };
+
+  const scope: RuntimeFooterConfigScope = mode === "local" ? "project" : "global";
+  const candidates = planEditConfigCandidates(roots, scope);
+  const target =
+    selectFirstExistingConfigCandidate(candidates, collectExistenceFacts(candidates, fileExists)) ?? candidates[0];
+  if (!target) throw new Error("runtime-footer config candidates must include JSONC");
+
+  return {
+    kind: "edit",
+    target,
+    notice:
+      mode === "local" && !projectTrusted
+        ? `Project-local runtime-footer config at ${target.path} is not consumed now; it requires project trust on the next startup or restart.`
+        : undefined,
+  };
+}
+
+function runtimeFooterConfigRoots(cwd: string, agentDir: string): RuntimeFooterConfigRoots {
+  return { cwd, agentDir, configDirName: CONFIG_DIR_NAME };
+}
 
 const DEFAULT_LEFT_BLOCKS: FooterBlockId[] = ["cwd", "git-branch", "session-notes"];
 
@@ -336,42 +504,6 @@ export function parseConfig(value: unknown): RuntimeFooterConfig | null {
   return config;
 }
 
-function projectConfigPathJsonc(cwd: string): string {
-  return path.join(cwd, PROJECT_CONFIG_RELATIVE_PATH_JSONC);
-}
-
-function projectConfigPathJson(cwd: string): string {
-  return path.join(cwd, PROJECT_CONFIG_RELATIVE_PATH_JSON);
-}
-
-function resolveLocalConfigPath(cwd: string): string {
-  const jsoncPath = projectConfigPathJsonc(cwd);
-  if (existsSync(jsoncPath)) return jsoncPath;
-
-  const jsonPath = projectConfigPathJson(cwd);
-  if (existsSync(jsonPath)) return jsonPath;
-
-  return jsoncPath;
-}
-
-function resolveGlobalConfigPath(): string {
-  if (existsSync(GLOBAL_CONFIG_PATH_JSONC)) return GLOBAL_CONFIG_PATH_JSONC;
-  if (existsSync(GLOBAL_CONFIG_PATH_JSON)) return GLOBAL_CONFIG_PATH_JSON;
-  return GLOBAL_CONFIG_PATH_JSONC;
-}
-
-function resolveConfigSourcePath(cwd: string): string | null {
-  const localJsonc = projectConfigPathJsonc(cwd);
-  if (existsSync(localJsonc)) return localJsonc;
-
-  const localJson = projectConfigPathJson(cwd);
-  if (existsSync(localJson)) return localJson;
-
-  if (existsSync(GLOBAL_CONFIG_PATH_JSONC)) return GLOBAL_CONFIG_PATH_JSONC;
-  if (existsSync(GLOBAL_CONFIG_PATH_JSON)) return GLOBAL_CONFIG_PATH_JSON;
-  return null;
-}
-
 /**
  * Lightweight JSONC support for runtime-footer config.
  *
@@ -492,19 +624,41 @@ function parseJsonOrJsonc(text: string): unknown {
   return JSON.parse(noTrailingCommas);
 }
 
-function readFooterConfig(cwd: string, previous: FooterConfigCache | undefined): FooterConfigCache {
-  const now = Date.now();
+function readConfigMtime(pathname: string): number {
+  return statSync(pathname).mtimeMs;
+}
 
-  if (previous && previous.cwd === cwd && now - previous.checkedAt < CONFIG_CHECK_TTL_MS) {
+function readConfigText(pathname: string): string {
+  return readFileSync(pathname, "utf8");
+}
+
+export function readFooterConfig(
+  roots: RuntimeFooterConfigRoots,
+  projectTrusted: boolean,
+  previous: FooterConfigCache | undefined,
+  fileExists: ConfigFileExists = existsSync,
+  readMtime: ConfigFileMtime = readConfigMtime,
+  readText: ConfigFileText = readConfigText,
+): FooterConfigCache {
+  const now = Date.now();
+  const { cwd } = roots;
+
+  if (
+    previous &&
+    previous.cwd === cwd &&
+    previous.projectTrusted === projectTrusted &&
+    now - previous.checkedAt < CONFIG_CHECK_TTL_MS
+  ) {
     return previous;
   }
 
-  const sourcePath = resolveConfigSourcePath(cwd);
+  const source = resolveAutomaticConfigSource(roots, projectTrusted, fileExists);
   const fallback = defaultConfig();
 
-  if (!sourcePath) {
+  if (!source) {
     return {
       cwd,
+      projectTrusted,
       checkedAt: now,
       sourcePath: null,
       sourceMtimeMs: null,
@@ -512,9 +666,10 @@ function readFooterConfig(cwd: string, previous: FooterConfigCache | undefined):
     };
   }
 
+  const sourcePath = source.path;
   let sourceMtimeMs: number | null;
   try {
-    sourceMtimeMs = statSync(sourcePath).mtimeMs;
+    sourceMtimeMs = readMtime(sourcePath);
   } catch {
     sourceMtimeMs = null;
   }
@@ -522,6 +677,7 @@ function readFooterConfig(cwd: string, previous: FooterConfigCache | undefined):
   if (
     previous &&
     previous.cwd === cwd &&
+    previous.projectTrusted === projectTrusted &&
     previous.sourcePath === sourcePath &&
     previous.sourceMtimeMs === sourceMtimeMs
   ) {
@@ -529,7 +685,7 @@ function readFooterConfig(cwd: string, previous: FooterConfigCache | undefined):
   }
 
   try {
-    const raw = parseJsonOrJsonc(readFileSync(sourcePath, "utf8"));
+    const raw = parseJsonOrJsonc(readText(sourcePath));
     const parsed = parseConfig(raw);
     if (!parsed) {
       throw new Error("config root must be an object");
@@ -537,6 +693,7 @@ function readFooterConfig(cwd: string, previous: FooterConfigCache | undefined):
 
     return {
       cwd,
+      projectTrusted,
       checkedAt: now,
       sourcePath,
       sourceMtimeMs,
@@ -546,6 +703,7 @@ function readFooterConfig(cwd: string, previous: FooterConfigCache | undefined):
     const message = error instanceof Error ? error.message : String(error);
     return {
       cwd,
+      projectTrusted,
       checkedAt: now,
       sourcePath,
       sourceMtimeMs,
@@ -618,7 +776,11 @@ function formatModel(ctx: ExtensionContext): string {
   return shortenModelId(ctx.model?.id ?? "no-model");
 }
 
-function formatThinking(pi: ExtensionAPI): string {
+type RuntimeFooterThinkingApi = {
+  getThinkingLevel(): string;
+};
+
+function formatThinking(pi: RuntimeFooterThinkingApi): string {
   return pi.getThinkingLevel();
 }
 
@@ -718,7 +880,7 @@ type RenderBlockParams = {
   blockId: FooterBlockId;
   theme: ExtensionContext["ui"]["theme"];
   ctx: ExtensionContext;
-  pi: ExtensionAPI;
+  pi: RuntimeFooterThinkingApi;
   config: RuntimeFooterConfig;
   gitBranch: string | null;
   gitStats: GitStats | null;
@@ -957,7 +1119,7 @@ export function renderSide(
   truncateBlocks: string[] | null,
   theme: ExtensionContext["ui"]["theme"],
   ctx: ExtensionContext,
-  pi: ExtensionAPI,
+  pi: RuntimeFooterThinkingApi,
   config: RuntimeFooterConfig,
   gitBranch: string | null,
   gitStats: GitStats | null,
@@ -1096,7 +1258,9 @@ function ensureConfigFile(pathname: string): void {
   }
 }
 
-async function openConfigInEditor(ctx: ExtensionContext, pathname: string): Promise<{ ok: boolean; message: string }> {
+type RuntimeFooterEditorResult = { ok: boolean; message: string };
+
+async function openConfigInEditor(ctx: ExtensionContext, pathname: string): Promise<RuntimeFooterEditorResult> {
   const editorCommand = process.env.VISUAL || process.env.EDITOR;
   if (!editorCommand) {
     return {
@@ -1115,7 +1279,54 @@ async function openConfigInEditor(ctx: ExtensionContext, pathname: string): Prom
   return result.ok ? { ok: true, message: `Updated ${pathname}` } : result;
 }
 
-export default function runtimeFooterExtension(pi: ExtensionAPI) {
+export type RuntimeFooterSessionRegistration =
+  | {
+      event: "session_start";
+      handler: (event: SessionStartEvent, ctx: ExtensionContext) => Promise<void> | void;
+    }
+  | {
+      event: "session_tree";
+      handler: (event: SessionTreeEvent, ctx: ExtensionContext) => Promise<void> | void;
+    };
+
+export type RuntimeFooterExtensionApi = {
+  events: ExtensionAPI["events"];
+  getThinkingLevel(): string;
+  on(registration: RuntimeFooterSessionRegistration): void;
+  registerCommand(
+    name: string,
+    command: {
+      description?: string;
+      getArgumentCompletions?: (prefix: string) => RuntimeFooterConfigCommandCompletion[] | null;
+      handler(args: string, ctx: ExtensionContext): Promise<void>;
+    },
+  ): void;
+};
+
+export type RuntimeFooterExtensionEffects = {
+  getAgentDir(): string;
+  fileExists: ConfigFileExists;
+  readMtime: ConfigFileMtime;
+  readText: ConfigFileText;
+  ensureConfigFile(pathname: string): void;
+  openConfigInEditor(ctx: ExtensionContext, pathname: string): Promise<RuntimeFooterEditorResult>;
+};
+
+function defaultRuntimeFooterExtensionEffects(): RuntimeFooterExtensionEffects {
+  return {
+    getAgentDir,
+    fileExists: existsSync,
+    readMtime: readConfigMtime,
+    readText: readConfigText,
+    ensureConfigFile,
+    openConfigInEditor,
+  };
+}
+
+export function registerRuntimeFooterExtension(
+  pi: RuntimeFooterExtensionApi,
+  effects: RuntimeFooterExtensionEffects = defaultRuntimeFooterExtensionEffects(),
+) {
   let commsActive = false;
   let gitStatsCache: GitStatsCache | undefined;
   let projectNameCache: ProjectNameCache | undefined;
@@ -1129,43 +1340,29 @@ export default function runtimeFooterExtension(pi: ExtensionAPI) {
   pi.registerCommand(COMMAND_NAME, {
     description:
       "Open runtime footer config in $EDITOR. Usage: /runtime-footer-config [global|local] (default: global)",
-    getArgumentCompletions: (prefix) => {
-      const options = [
-        {
-          label: "global",
-          value: "global",
-          description: "edit ~/.pi/agent/runtime-footer.jsonc",
-        },
-        {
-          label: "local",
-          value: "local",
-          description: "edit .pi/runtime-footer.jsonc in current repo",
-        },
-      ];
-
-      const normalized = prefix.trim().toLowerCase();
-      const filtered = options.filter((option) => option.value.startsWith(normalized));
-
-      return filtered.length > 0 ? filtered : null;
-    },
+    getArgumentCompletions: runtimeFooterConfigCommandCompletions,
     handler: async (args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify(`/${COMMAND_NAME} requires interactive mode`, "error");
         return;
       }
 
-      const modeRaw = args.trim();
-      const mode = modeRaw === "" ? "global" : modeRaw === "project" ? "local" : modeRaw;
-      if (mode !== "global" && mode !== "local") {
-        ctx.ui.notify("Usage: /runtime-footer-config [global|local]", "warning");
+      const plan = planRuntimeFooterConfigEdit(
+        args,
+        runtimeFooterConfigRoots(ctx.cwd, effects.getAgentDir()),
+        ctx.isProjectTrusted(),
+        effects.fileExists,
+      );
+      if (plan.kind === "invalid") {
+        ctx.ui.notify(plan.usage, "warning");
         return;
       }
 
-      const targetPath = mode === "local" ? resolveLocalConfigPath(ctx.cwd) : resolveGlobalConfigPath();
-      ensureConfigFile(targetPath);
+      effects.ensureConfigFile(plan.target.path);
 
-      const opened = await openConfigInEditor(ctx, targetPath);
-      ctx.ui.notify(opened.message, opened.ok ? "info" : "warning");
+      const opened = await effects.openConfigInEditor(ctx, plan.target.path);
+      const message = plan.notice ? `${opened.message} ${plan.notice}` : opened.message;
+      ctx.ui.notify(message, opened.ok ? "info" : "warning");
 
       configCache = undefined;
       lastConfigError = undefined;
@@ -1194,7 +1391,14 @@ export default function runtimeFooterExtension(pi: ExtensionAPI) {
           const terminalWidth = process.stdout.columns ?? width;
           const safeWidth = Math.max(1, Math.min(width, terminalWidth));
 
-          configCache = readFooterConfig(ctx.cwd, configCache);
+          configCache = readFooterConfig(
+            runtimeFooterConfigRoots(ctx.cwd, effects.getAgentDir()),
+            ctx.isProjectTrusted(),
+            configCache,
+            effects.fileExists,
+            effects.readMtime,
+            effects.readText,
+          );
           if (configCache.error && configCache.error !== lastConfigError) {
             lastConfigError = configCache.error;
             ctx.ui.notify(`runtime-footer config error (${configCache.error}); using defaults`, "warning");
@@ -1275,6 +1479,27 @@ export default function runtimeFooterExtension(pi: ExtensionAPI) {
     });
   };
 
-  pi.on("session_start", async (_event, ctx) => installFooter(ctx));
-  pi.on("session_tree", async (_event, ctx) => installFooter(ctx));
+  pi.on({
+    event: "session_start",
+    handler: (_event, ctx) => installFooter(ctx),
+  });
+  pi.on({
+    event: "session_tree",
+    handler: (_event, ctx) => installFooter(ctx),
+  });
+}
+
+export default function runtimeFooterExtension(pi: ExtensionAPI) {
+  registerRuntimeFooterExtension({
+    events: pi.events,
+    getThinkingLevel: () => pi.getThinkingLevel(),
+    on: (registration) => {
+      if (registration.event === "session_start") {
+        pi.on("session_start", registration.handler);
+      } else {
+        pi.on("session_tree", registration.handler);
+      }
+    },
+    registerCommand: (name, command) => pi.registerCommand(name, command),
+  });
 }
