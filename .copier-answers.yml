@@ -1,0 +1,14 @@
+# Changes to this file will be overwritten by Copier updates.
+# Review it with the template source before running `copier update`.
+_commit: '2842902'
+_src_path: /home/piotr/git/copier/template-pi-package
+copyright_year: 2026
+extension_name: index
+github_owner: caseneuve
+initial_version: 0.0.0
+package_description: Runtime UI extensions for Pi.
+package_name: pi-runtime-ui
+pi_api_version: 0.84.2
+repository_name: pi-runtime-ui
+resource_types:
+- extensions

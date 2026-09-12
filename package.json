@@ -1,0 +1,62 @@
+{
+  "name": "pi-runtime-ui",
+  "version": "0.0.0",
+  "description": "Runtime UI extensions for Pi.",
+  "type": "module",
+  "license": "MIT",
+  "copyright": "Copyright (c) 2026 Caseneuve",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "agents",
+    "extensions"
+  ],
+  "files": [
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "scripts",
+    "extensions"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/branch-status.ts",
+      "./extensions/editor-status.ts",
+      "./extensions/runtime-footer.ts"
+    ]
+  },
+  "scripts": {
+    "check": "biome check --write --error-on-warnings .",
+    "check:ci": "biome check --error-on-warnings .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "verify": "npm run check:ci && npm run typecheck && npm test",
+    "pack:check": "npm pack --dry-run --json",
+    "prepare": "node scripts/install-prek-hook.mjs"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.3.5",
+    "@earendil-works/pi-ai": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-tui": "0.84.2",
+    "@j178/prek": "0.4.14",
+    "@types/node": "24.10.1",
+    "@vitest/coverage-v8": "4.1.9",
+    "typescript": "5.9.3",
+    "vitest": "4.1.9"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/caseneuve/pi-runtime-ui.git"
+  },
+  "bugs": {
+    "url": "https://github.com/caseneuve/pi-runtime-ui/issues"
+  },
+  "homepage": "https://github.com/caseneuve/pi-runtime-ui#readme"
+}
