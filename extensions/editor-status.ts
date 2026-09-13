@@ -1,5 +1,13 @@
-import { CustomEditor, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  CustomEditor,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type SessionShutdownEvent,
+  type SessionStartEvent,
+} from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import {
   formatGitStatsPlainCompact,
   formatGitStatsStyledCompact,
@@ -15,20 +23,43 @@ type EditorStatusState = {
   commsActive: boolean;
 };
 
+type EditorStatusSessionRegistration =
+  | {
+      event: "session_start";
+      handler: (event: SessionStartEvent, ctx: ExtensionContext) => Promise<void> | void;
+    }
+  | {
+      event: "session_shutdown";
+      handler: (event: SessionShutdownEvent, ctx: ExtensionContext) => Promise<void> | void;
+    };
+
+export type EditorStatusExtensionApi = {
+  events: ExtensionAPI["events"];
+  on(registration: EditorStatusSessionRegistration): void;
+};
+
+const agentChannelIdentitySchema = Type.Object({
+  id: Type.Optional(Type.String()),
+  label: Type.Optional(Type.String()),
+});
+const agentChannelCommsSchema = Type.Object({ active: Type.Boolean() });
+
+function normalizeName(value: string | undefined): string | undefined {
+  const name = value?.trim();
+  return name || undefined;
+}
+
 function readInitialState(ctx: ExtensionContext): EditorStatusState {
   let name = "agent";
   let commsActive = false;
 
   for (const entry of ctx.sessionManager.getEntries()) {
     if (entry.type !== "custom") continue;
-    if (entry.customType === "agent-channel-identity") {
-      const data = (entry as { data?: { label?: string; id?: string } }).data;
-      if (data?.label) name = data.label;
-      else if (data?.id) name = data.id;
+    if (entry.customType === "agent-channel-identity" && Value.Check(agentChannelIdentitySchema, entry.data)) {
+      name = entry.data.label || entry.data.id || name;
     }
-    if (entry.customType === "agent-channel-comms") {
-      const data = (entry as { data?: { active?: unknown } }).data;
-      if (typeof data?.active === "boolean") commsActive = data.active;
+    if (entry.customType === "agent-channel-comms" && Value.Check(agentChannelCommsSchema, entry.data)) {
+      commsActive = entry.data.active;
     }
   }
 
@@ -96,7 +127,7 @@ function renderTopBorder(
 
 function installEditor(
   ctx: ExtensionContext,
-  pi: ExtensionAPI,
+  pi: EditorStatusExtensionApi,
   disposePreviousSubscriptions: () => void,
   setDisposeSubscriptions: (dispose: () => void) => void,
 ): void {
@@ -108,15 +139,16 @@ function installEditor(
   const fullTheme = ctx.ui.theme;
 
   ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-    const disposeName = pi.events.on("agent-channel:name", (value: unknown) => {
-      if (typeof value === "string" && value.trim().length > 0) {
-        state = { ...state, name: value.trim() };
-        tui.requestRender();
-      }
+    const disposeName = pi.events.on("agent-channel:name", (value) => {
+      if (!Value.Check(Type.String(), value)) return;
+      const name = normalizeName(value);
+      if (!name) return;
+      state = { ...state, name };
+      tui.requestRender();
     });
 
-    const disposeComms = pi.events.on("agent-channel:comms", (value: unknown) => {
-      state = { ...state, commsActive: value === true };
+    const disposeComms = pi.events.on("agent-channel:comms", (value) => {
+      state = { ...state, commsActive: Value.Check(Type.Literal(true), value) };
       tui.requestRender();
     });
 
@@ -147,7 +179,7 @@ function installEditor(
   });
 }
 
-export default function editorStatusExtension(pi: ExtensionAPI) {
+export function registerEditorStatusExtension(pi: EditorStatusExtensionApi): void {
   let disposeSubscriptions: (() => void) | undefined;
 
   const clearSubscriptions = () => {
@@ -155,14 +187,33 @@ export default function editorStatusExtension(pi: ExtensionAPI) {
     disposeSubscriptions = undefined;
   };
 
-  pi.on("session_start", async (_event, ctx) => {
-    if (!ctx.hasUI) return;
-    installEditor(ctx, pi, clearSubscriptions, (dispose) => {
-      disposeSubscriptions = dispose;
-    });
+  pi.on({
+    event: "session_start",
+    handler: async (_event, ctx) => {
+      if (!ctx.hasUI) return;
+      installEditor(ctx, pi, clearSubscriptions, (dispose) => {
+        disposeSubscriptions = dispose;
+      });
+    },
   });
 
-  pi.on("session_shutdown", async () => {
-    clearSubscriptions();
+  pi.on({
+    event: "session_shutdown",
+    handler: async () => {
+      clearSubscriptions();
+    },
+  });
+}
+
+export default function editorStatusExtension(pi: ExtensionAPI) {
+  registerEditorStatusExtension({
+    events: pi.events,
+    on: (registration) => {
+      if (registration.event === "session_start") {
+        pi.on("session_start", registration.handler);
+      } else {
+        pi.on("session_shutdown", registration.handler);
+      }
+    },
   });
 }

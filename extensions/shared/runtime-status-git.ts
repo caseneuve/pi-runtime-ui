@@ -92,7 +92,7 @@ function readGitStats(): GitStats | null {
 
 export function isGitRepo(_cwd: string = process.cwd()): boolean {
   const topLevel = runGit(["rev-parse", "--show-toplevel"]);
-  return typeof topLevel === "string" && topLevel.trim().length > 0;
+  return Boolean(topLevel?.trim());
 }
 
 export function getGitStats(cache: GitStatsCache | undefined): GitStatsCache {

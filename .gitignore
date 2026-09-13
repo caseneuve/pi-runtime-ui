@@ -1,5 +1,6 @@
-node_modules/
-coverage/
-.reviews/
 *.log
 .DS_Store
+.reviews/
+coverage/
+node_modules/
+tools

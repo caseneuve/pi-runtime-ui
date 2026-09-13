@@ -1,3 +1,4 @@
+import { parseSessionEntries, SessionManager } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 
@@ -22,6 +23,8 @@ function renderLeft(
     truncateBlocks?: string[] | null;
     statuses?: ReadonlyMap<string, string>;
     explicitSeparatorMode?: boolean;
+    branch?: ReturnType<SessionManager["getBranch"]>;
+    provider?: string;
   } = {},
 ): string {
   const config = compiled({
@@ -33,6 +36,12 @@ function renderLeft(
     branchStatusLine: false,
   });
 
+  const context = {
+    getContextUsage: () => undefined,
+    model: options.provider ? { provider: options.provider } : undefined,
+    sessionManager: { getBranch: () => options.branch ?? [] },
+  };
+
   return renderSide(
     config.left,
     config.separator,
@@ -40,8 +49,9 @@ function renderLeft(
     config.truncateBlocks,
     // SAFETY: this renderer fixture only invokes the identity fg function.
     identityTheme as never,
-    // SAFETY: these layouts contain no blocks that read the Pi context.
-    {} as never,
+    // SAFETY: these blocks read only model, getContextUsage, and getBranch,
+    // each of which this fixture provides.
+    context as never,
     { getThinkingLevel: () => "off" },
     config,
     "main",
@@ -115,5 +125,23 @@ describe("runtime-footer compiled rendering", () => {
     );
 
     expect(rendered).toBe("main | [+2/-1 (1)]");
+  });
+
+  it("tolerates a malformed but loadable persisted assistant usage entry as zero cost", () => {
+    const entries = parseSessionEntries(
+      [
+        '{"type":"session","version":3,"id":"session","timestamp":"2026-09-12T00:00:00.000Z","cwd":"/workspace"}',
+        '{"type":"message","id":"assistant","parentId":null,"timestamp":"2026-09-12T00:00:01.000Z","message":{"role":"assistant","content":[],"api":"test","provider":"test","model":"test","stopReason":"stop","timestamp":0}}',
+      ].join("\n"),
+    );
+    const session = SessionManager.inMemory("/workspace", undefined, entries);
+
+    expect(renderLeft(["cost"], { branch: session.getBranch() })).toBe("");
+  });
+
+  it("shortens documented provider mappings and preserves custom provider IDs", () => {
+    expect(renderLeft(["provider"], { provider: "amazon-bedrock" })).toBe("bedrock");
+    expect(renderLeft(["provider"], { provider: "custom-provider" })).toBe("custom-provider");
+    expect(renderLeft(["provider"], { provider: "toString" })).toBe("toString");
   });
 });

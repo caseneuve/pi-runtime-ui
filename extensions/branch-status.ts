@@ -1,9 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-
-type SessionEntryLike = {
-  id: string;
-  parentId: string | null;
-};
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "branch-status";
 const RENDER_EVENT = "branch-status:changed";
@@ -17,7 +12,7 @@ function truncateLabel(label: string): string {
   return `${normalized.slice(0, MAX_LABEL_LENGTH - 1)}…`;
 }
 
-function hasBranches(entries: SessionEntryLike[]): boolean {
+function hasBranches(entries: readonly SessionEntry[]): boolean {
   const childCounts = new Map<string, number>();
 
   for (const entry of entries) {
@@ -30,10 +25,10 @@ function hasBranches(entries: SessionEntryLike[]): boolean {
   return false;
 }
 
-function labelsOnCurrentPath(ctx: ExtensionContext, entries: SessionEntryLike[]): string[] {
+function labelsOnCurrentPath(ctx: ExtensionContext, entries: readonly SessionEntry[]): string[] {
   const entriesById = new Map(entries.map((entry) => [entry.id, entry]));
   const labels: string[] = [];
-  let entry = ctx.sessionManager.getLeafEntry() as SessionEntryLike | undefined;
+  let entry = ctx.sessionManager.getLeafEntry();
 
   while (entry) {
     const label = ctx.sessionManager.getLabel(entry.id);
@@ -45,7 +40,7 @@ function labelsOnCurrentPath(ctx: ExtensionContext, entries: SessionEntryLike[])
 }
 
 function renderStatus(ctx: ExtensionContext): string | undefined {
-  const entries = ctx.sessionManager.getEntries() as SessionEntryLike[];
+  const entries = ctx.sessionManager.getEntries();
   if (!hasBranches(entries)) return undefined;
 
   const labels = labelsOnCurrentPath(ctx, entries);

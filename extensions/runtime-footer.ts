@@ -1,7 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
   CONFIG_DIR_NAME,
   type ExtensionAPI,
@@ -11,6 +10,8 @@ import {
   type SessionTreeEvent,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { Value } from "typebox/value";
 import { openExternalEditor } from "./shared/external-editor";
 import {
   type CompiledConfig,
@@ -386,15 +387,15 @@ function computeProjectName(): string {
   return base || source;
 }
 
-const PROVIDER_SHORT: Record<string, string> = {
+const PROVIDER_SHORT = {
   "amazon-bedrock": "bedrock",
   "azure-openai": "azure",
   "google-vertex": "vertex",
   "openai-codex": "openai",
-};
+} satisfies Record<string, string>;
 
 function shortenProvider(raw: string): string {
-  return PROVIDER_SHORT[raw] ?? raw;
+  return Object.entries(PROVIDER_SHORT).find(([provider]) => provider === raw)?.[1] ?? raw;
 }
 
 /**
@@ -473,8 +474,7 @@ function formatCost(ctx: ExtensionContext): string | null {
 
   for (const entry of ctx.sessionManager.getBranch()) {
     if (entry.type === "message" && entry.message.role === "assistant") {
-      const message = entry.message as AssistantMessage;
-      cost += message.usage?.cost?.total ?? 0;
+      cost += entry.message.usage?.cost?.total ?? 0;
     }
   }
 
@@ -487,7 +487,7 @@ function formatCost(ctx: ExtensionContext): string | null {
 
 function getContextUsagePercent(ctx: ExtensionContext): number | null {
   const usage = ctx.getContextUsage?.();
-  const contextWindow = (ctx.model as { contextWindow?: number } | undefined)?.contextWindow;
+  const contextWindow = ctx.model?.contextWindow;
 
   if (!usage || usage.tokens === null || !contextWindow || contextWindow <= 0) {
     return null;
@@ -844,8 +844,8 @@ export function registerRuntimeFooterExtension(
   let configCache: FooterConfigCache | undefined;
   let lastConfigError: string | undefined;
 
-  pi.events.on("agent-channel:comms", (active: unknown) => {
-    commsActive = active === true;
+  pi.events.on("agent-channel:comms", (active) => {
+    commsActive = Value.Check(Type.Literal(true), active);
   });
 
   pi.registerCommand(COMMAND_NAME, {

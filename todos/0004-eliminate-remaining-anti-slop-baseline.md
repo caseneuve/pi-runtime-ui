@@ -1,6 +1,6 @@
 ---
 title: eliminate remaining anti slop baseline
-status: open
+status: done
 priority: medium
 type: chore
 labels: []
@@ -23,18 +23,18 @@ boundaries, production typing, test fixtures, and CI wiring in one change.
 
 ## Acceptance Criteria
 
-- [ ] Subtasks #0004.1 through #0004.3 eliminate every current diagnostic
+- [x] Subtasks #0004.1 through #0004.3 eliminate every current diagnostic
       without disabling rules, broadening ignores, or adding unjustified
       assertions or suppressions.
-- [ ] Extension commands, events, statuses, rendering, package resources, and
+- [x] Extension commands, events, statuses, rendering, package resources, and
       documented platform behavior remain unchanged.
-- [ ] Subtask #0004.4 makes a zero anti-slop baseline part of both local
+- [x] Subtask #0004.4 makes a zero anti-slop baseline part of both local
       verification and GitHub Actions after the cleanup subtasks land.
-- [ ] `npm run lint:anti-slop`, `npm run verify`, `npm run test:coverage`, and
+- [x] `npm run lint:anti-slop`, `npm run verify`, `npm run test:coverage`, and
       `npm run pack:check` pass with zero anti-slop diagnostics.
-- [ ] Focused local and immutable-SHA installation checks pass for the completed
+- [x] Focused local and immutable-SHA installation checks pass for the completed
       aggregate change.
-- [ ] Independent review approves the aggregate result against the child todos
+- [x] Independent review approves the aggregate result against the child todos
       and `AGENTS.md`.
 
 ## Affected Files
@@ -67,6 +67,14 @@ boundaries, production typing, test fixtures, and CI wiring in one change.
   for enforcement, not current diagnostic-bearing files.
 - Prefer deletion, inference, precise upstream types, and small boundary
   decoders over casts, wrappers, or abstractions added only to silence lint.
+- Subtask reviews are recorded under `.reviews/` at timestamps `200653`,
+  `202327`, `203706`, and `210136`; each final disposition is approved. The last
+  review independently covered #0004.4 and the aggregate result.
+- Aggregate verification passed with 86 tests and zero anti-slop diagnostics;
+  coverage, package dry-run, and Prek passed. Isolated local installation and an
+  immutable detached Git install at full code SHA
+  `e8bbd0f19bba697a9297f493ccd0e053970a59ea` both exposed all three explicit
+  extension resources without changing user or project settings.
 - Visible UI review is required only if a child changes rendered output; a
   behavior-neutral typing or CI-only child should record why it does not.
 - `parent` records hierarchy. `blocked-by`/`blocks` record execution

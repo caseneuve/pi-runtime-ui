@@ -13,10 +13,14 @@ import {
   registerRuntimeFooterExtension,
 } from "../extensions/runtime-footer";
 
+type AgentChannelTestPayload = boolean | { active: boolean };
+
 type CapturedAdapter = {
   command: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
   sessionStart: ((event: SessionStartEvent, ctx: ExtensionContext) => Promise<void> | void) | undefined;
   sessionTree: ((event: SessionTreeEvent, ctx: ExtensionContext) => Promise<void> | void) | undefined;
+  emit(channel: string, data: AgentChannelTestPayload): void;
+  listenerCount(channel: string): number;
 };
 
 type AccessRecorder = {
@@ -79,14 +83,29 @@ function createAccessRecorder(existingPaths: readonly string[]): AccessRecorder 
 }
 
 function createAdapter(effects: RuntimeFooterExtensionEffects): CapturedAdapter {
+  const handlers = new Map<string, Set<() => void>>();
+  let payload: AgentChannelTestPayload = false;
   const captured: CapturedAdapter = {
     command: undefined,
     sessionStart: undefined,
     sessionTree: undefined,
+    emit(channel, data): void {
+      payload = data;
+      for (const handler of handlers.get(channel) ?? []) handler();
+    },
+    listenerCount(channel): number {
+      return handlers.get(channel)?.size ?? 0;
+    },
   };
   const api: RuntimeFooterExtensionApi = {
     events: {
-      on: () => () => {},
+      on(channel, handler): () => void {
+        const channelHandlers = handlers.get(channel) ?? new Set<() => void>();
+        const notify = () => handler(payload);
+        channelHandlers.add(notify);
+        handlers.set(channel, channelHandlers);
+        return () => channelHandlers.delete(notify);
+      },
       emit: () => {},
     },
     getThinkingLevel: () => "off",
@@ -263,6 +282,64 @@ describe("runtime-footer extension adapters", () => {
     adapter.sessionStart({ type: "session_start", reason: "startup" }, context);
     expect(() => renderCapturedFooter(context)).not.toThrow();
     expect(notifications).toEqual([expect.stringContaining("permission denied")]);
+  });
+
+  it("rerenders the comms block after a decoded comms event", () => {
+    const globalJsonc = configPath("global", "config.jsonc");
+    const effects: RuntimeFooterExtensionEffects = {
+      getAgentDir: () => agentDir,
+      fileExists: (pathname) => pathname === globalJsonc,
+      readMtime: () => 1,
+      readText: () => '{"left":["comms"],"right":[],"branchStatusLine":false}',
+      ensureConfigFile: () => {},
+      openConfigInEditor: async () => ({ ok: true, message: "opened" }),
+    };
+    const adapter = createAdapter(effects);
+    const context = createContext(false, () => {});
+    if (!adapter.sessionStart) throw new Error("expected session_start handler");
+
+    adapter.sessionStart({ type: "session_start", reason: "startup" }, context);
+    const footerFactory = context.getFooterFactory();
+    let renders = 0;
+    // SAFETY: this adapter render path uses requestRender, fg, and the listed
+    // footer-data methods; this fixture provides exactly those runtime members.
+    const branchListeners = new Set<() => void>();
+    const component = footerFactory(
+      // SAFETY: the footer factory reads only requestRender from this TUI fixture.
+      {
+        requestRender: () => {
+          renders += 1;
+        },
+      } as Parameters<NonNullable<typeof footerFactory>>[0],
+      // SAFETY: the footer factory reads only fg from this theme fixture.
+      { fg: (_tone: string, text: string) => text } as Parameters<NonNullable<typeof footerFactory>>[1],
+      // SAFETY: the footer factory reads only these footer-data methods.
+      {
+        getAvailableProviderCount: () => 0,
+        getExtensionStatuses: () => new Map<string, string>(),
+        getGitBranch: () => null,
+        onBranchChange(listener): () => void {
+          branchListeners.add(listener);
+          return () => branchListeners.delete(listener);
+        },
+      } as Parameters<NonNullable<typeof footerFactory>>[2],
+    );
+
+    expect(component.render(80)[0]).not.toContain("📡");
+    adapter.emit("agent-channel:comms", true);
+    expect(component.render(80)[0]).toContain("📡");
+    adapter.emit("agent-channel:comms", { active: true });
+    expect(component.render(80)[0]).not.toContain("📡");
+    for (const listener of branchListeners) listener?.();
+    expect(renders).toBe(3);
+    expect(adapter.listenerCount("agent-channel:comms")).toBe(2);
+
+    if (!component.dispose) throw new Error("expected footer disposal");
+    component.dispose();
+    expect(adapter.listenerCount("agent-channel:comms")).toBe(1);
+    adapter.emit("agent-channel:comms", true);
+    for (const listener of branchListeners) listener?.();
+    expect(renders).toBe(3);
   });
 
   it("limits an untrusted local command to canonical project candidates and reports trust", async () => {
