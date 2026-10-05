@@ -398,9 +398,18 @@ describe("runtime-footer thinking blocks", () => {
     expect(new Set(Object.values(DEFAULT_THINKING_MAPPING)).size).toBe(Object.keys(DEFAULT_THINKING_MAPPING).length);
   });
 
-  it("gives max a stronger tone than xhigh", () => {
-    expect(thinkingBlockTone("xhigh")).toBe("warning");
-    expect(thinkingBlockTone("max")).toBe("error");
+  it.each([
+    ["off", "thinkingOff"],
+    ["minimal", "thinkingMinimal"],
+    ["low", "thinkingLow"],
+    ["medium", "thinkingMedium"],
+    ["high", "thinkingHigh"],
+    ["xhigh", "thinkingXhigh"],
+    ["max", "thinkingMax"],
+    [" HIGH ", "thinkingHigh"],
+    ["unknown", "thinkingOff"],
+  ])("maps %s to native token %s", (level, token) => {
+    expect(thinkingBlockTone(level)).toBe(token);
   });
 
   it("strips OpenAI dot-prefixes from model ids", () => {

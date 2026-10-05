@@ -503,14 +503,16 @@ function contextHeatTone(percent: number): "success" | "dim" | "warning" | "erro
   return "error";
 }
 
-export function thinkingBlockTone(level: string): "dim" | "success" | "accent" | "warning" | "error" {
+export function thinkingBlockTone(level: string) {
+  // Match Pi's getThinkingBorderColor; the active theme owns the palette.
   const normalized = level.trim().toLowerCase();
-  if (normalized === "off" || normalized === "minimal") return "dim";
-  if (normalized === "low") return "success";
-  if (normalized === "medium") return "accent";
-  if (normalized === "high" || normalized === "xhigh") return "warning";
-  if (normalized === "max") return "error";
-  return "dim";
+  if (normalized === "minimal") return "thinkingMinimal";
+  if (normalized === "low") return "thinkingLow";
+  if (normalized === "medium") return "thinkingMedium";
+  if (normalized === "high") return "thinkingHigh";
+  if (normalized === "xhigh") return "thinkingXhigh";
+  if (normalized === "max") return "thinkingMax";
+  return "thinkingOff";
 }
 
 function contextBarText(percent: number, width: number): string {
@@ -542,7 +544,7 @@ type RenderBlockParams = {
 type FooterBlockText = {
   plain: string;
   styled: string;
-  tone: "dim" | "accent" | "success" | "warning" | "error";
+  tone: "dim" | "accent" | "success" | "warning" | "error" | ReturnType<typeof thinkingBlockTone>;
   preserveStyleOnTruncate?: boolean;
 };
 
