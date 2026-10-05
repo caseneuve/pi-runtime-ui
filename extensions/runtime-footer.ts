@@ -10,8 +10,6 @@ import {
   type SessionTreeEvent,
 } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
-import { Value } from "typebox/value";
 import { openExternalEditor } from "./shared/external-editor";
 import {
   type CompiledConfig,
@@ -220,7 +218,7 @@ const CONTEXT_BAR_EMPTY = "░";
 function defaultConfigText(): string {
   return `{
   // Ordered block ids rendered on the left side.
-  "left": ["cwd", "git-branch", "session-notes"],
+  "left": ["cwd", "git-branch"],
 
   // Ordered block ids rendered on the right side.
   "right": ["provider", "model", "thinking", "cost", "context"],
@@ -261,15 +259,11 @@ function defaultConfigText(): string {
     "barWidth": 8
   },
 
-  // Show branch-status extension line under the main footer.
-  "branchStatusLine": true,
-
   // Available block ids:
-  // cwd, project, git-branch, git-diff, session-notes, comms, provider, model, thinking, cost, context
-  // status:<key> (any extension status key, e.g. status:kilo-usage-day)
+  // cwd, project, git-branch, git-diff, provider, model, thinking, cost, context
+  // status:<key> renders any extension status.
   // Status values are normalized to one line; missing/empty values render nothing.
   // Empty status keys and duplicate placements are configuration errors.
-  // session-notes aliases status:session-notes; status:branch-status requires branchStatusLine: false.
   // sep, S (explicit separator pseudo-block)
   // text:<payload> uses ordinary spacing; T:<payload> manages its adjacent spacing.
   // ?text:<payload> / ?T:<payload> (show only when previous non-separator token renders non-empty)
@@ -543,7 +537,6 @@ type RenderBlockParams = {
   gitStats: GitStats | null;
   projectName: string;
   statuses: ReadonlyMap<string, string>;
-  commsActive: boolean;
 };
 
 type FooterBlockText = {
@@ -554,7 +547,7 @@ type FooterBlockText = {
 };
 
 function renderBlock(params: RenderBlockParams): FooterBlockText | undefined {
-  const { blockId, theme, ctx, pi, config, gitBranch, gitStats, projectName, statuses, commsActive } = params;
+  const { blockId, theme, ctx, pi, config, gitBranch, gitStats, projectName } = params;
 
   switch (blockId) {
     case "cwd": {
@@ -578,15 +571,6 @@ function renderBlock(params: RenderBlockParams): FooterBlockText | undefined {
       const statsStyled = formatGitStatsStyled(theme, gitStats);
       if (!statsPlain || !statsStyled) return undefined;
       return { plain: statsPlain, styled: statsStyled, tone: "dim" };
-    }
-    case "session-notes": {
-      const status = statuses.get("session-notes");
-      if (!status) return undefined;
-      return { plain: status, styled: theme.fg("dim", status), tone: "dim" };
-    }
-    case "comms": {
-      if (!commsActive) return undefined;
-      return { plain: "📡", styled: theme.fg("accent", "📡"), tone: "accent" };
     }
     case "provider": {
       const plain = formatProvider(ctx);
@@ -704,10 +688,9 @@ export function renderSide(
   gitStats: GitStats | null,
   projectName: string,
   statuses: ReadonlyMap<string, string>,
-  commsActive: boolean,
   explicitSeparatorMode: boolean,
 ): string {
-  const params = { theme, ctx, pi, config, gitBranch, gitStats, projectName, statuses, commsActive };
+  const params = { theme, ctx, pi, config, gitBranch, gitStats, projectName, statuses };
   const rendered = tokens.map((token) => renderToken(token, params));
   const explicitSeparators = explicitSeparatorMode;
   const renderedSeparator = theme.fg("dim", normalizeTabs(separator));
@@ -838,15 +821,10 @@ export function registerRuntimeFooterExtension(
   pi: RuntimeFooterExtensionApi,
   effects: RuntimeFooterExtensionEffects = defaultRuntimeFooterExtensionEffects(),
 ) {
-  let commsActive = false;
   let gitStatsCache: GitStatsCache | undefined;
   let projectNameCache: ProjectNameCache | undefined;
   let configCache: FooterConfigCache | undefined;
   let lastConfigError: string | undefined;
-
-  pi.events.on("agent-channel:comms", (active) => {
-    commsActive = Value.Check(Type.Literal(true), active);
-  });
 
   pi.registerCommand(COMMAND_NAME, {
     description:
@@ -886,15 +864,11 @@ export function registerRuntimeFooterExtension(
 
     ctx.ui.setFooter((tui, theme, footerData) => {
       const disposeBranch = footerData.onBranchChange(() => tui.requestRender());
-      const disposeBranchStatus = pi.events.on("branch-status:changed", () => tui.requestRender());
-      const disposeComms = pi.events.on("agent-channel:comms", () => tui.requestRender());
       const disposeConfig = pi.events.on(CONFIG_CHANGED_EVENT, () => tui.requestRender());
 
       return {
         dispose() {
           disposeBranch();
-          disposeBranchStatus();
-          disposeComms();
           disposeConfig();
         },
         invalidate() {},
@@ -952,7 +926,6 @@ export function registerRuntimeFooterExtension(
             gitStats,
             projectName,
             statuses,
-            commsActive,
             explicitSeparatorMode,
           );
           const right = renderSide(
@@ -968,20 +941,10 @@ export function registerRuntimeFooterExtension(
             gitStats,
             projectName,
             statuses,
-            commsActive,
             explicitSeparatorMode,
           );
 
-          const lines = [renderFooterLine(safeWidth, left, right)];
-
-          if (configCache.config.branchStatusLine) {
-            const branchStatus = statuses.get("branch-status");
-            if (branchStatus) {
-              lines.push(truncateToWidth(branchStatus, safeWidth));
-            }
-          }
-
-          return lines.map((line) => truncateToWidth(line, safeWidth));
+          return [truncateToWidth(renderFooterLine(safeWidth, left, right), safeWidth)];
         },
       };
     });

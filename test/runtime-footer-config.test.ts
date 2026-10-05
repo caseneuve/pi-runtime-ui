@@ -58,7 +58,7 @@ describe("runtime-footer config compiler", () => {
       mapping: expect.objectContaining({ high: "▆", medium: "▄" }),
     });
     expect(config.context).toEqual({ mode: "bar", barWidth: 4 });
-    expect(config.branchStatusLine).toBe(false);
+    expect(config).not.toHaveProperty("branchStatusLine");
   });
 
   it("uses fallback values for absent, invalid, and effectively empty fields", () => {
@@ -78,7 +78,6 @@ describe("runtime-footer config compiler", () => {
     expect(config.left.map((token) => (token.kind === "block" ? token.blockId : token.kind))).toEqual([
       "cwd",
       "git-branch",
-      "session-notes",
     ]);
     expect(config.right).toEqual([{ kind: "block", blockId: "git-branch" }]);
     expect(config.separator).toBe(" · ");
@@ -97,7 +96,7 @@ describe("runtime-footer config compiler", () => {
       },
     });
     expect(config.context).toEqual({ mode: "percent", barWidth: 8 });
-    expect(config.branchStatusLine).toBe(true);
+    expect(config).not.toHaveProperty("branchStatusLine");
   });
 
   it("rejects invalid scalar values while accepting context blocks", () => {
@@ -105,14 +104,14 @@ describe("runtime-footer config compiler", () => {
       '{"left":"not-an-array","right":[1,"unknown"],"separator":null,"truncate":1e999,"truncateBlocks":"cwd","thinking":{"mode":"other"},"context":{"mode":"blocks","barWidth":1e999},"branchStatusLine":null}',
     );
 
-    expect(config.left).toHaveLength(3);
+    expect(config.left).toHaveLength(2);
     expect(config.right).toEqual([{ kind: "ignored", token: "unknown" }]);
     expect(config.separator).toBe(" · ");
     expect(config.truncate).toBeNull();
     expect(config.truncateBlocks).toBeNull();
     expect(config.thinking.mode).toBe("literal");
     expect(config.context).toEqual({ mode: "blocks", barWidth: 8 });
-    expect(config.branchStatusLine).toBe(true);
+    expect(config).not.toHaveProperty("branchStatusLine");
   });
 
   it("classifies each retained DSL form once, including ignored positions", () => {
@@ -158,13 +157,31 @@ describe("runtime-footer config compiler", () => {
       ok: false,
       error: { message: 'status block "status:" must include a non-empty key' },
     });
-    expect(compileConfig('{"left":["session-notes"],"right":["status:session-notes"]}', "json")).toEqual({
+    expect(compileConfig('{"left":["status:note"],"right":["status:note"]}', "json")).toEqual({
       ok: false,
-      error: { message: 'duplicate extension status "session-notes" at left[0] and right[0]' },
+      error: { message: 'duplicate extension status "note" at left[0] and right[0]' },
     });
-    expect(compileConfig('{"left":["status:branch-status"],"right":[]}', "json")).toEqual({
+  });
+
+  it("accepts producer status tokens without special placement rules and ignores removed producer blocks", () => {
+    const config = expectConfig(
+      '{"left":["comms","session-notes","status:comms","status:session-notes","status:branch-status"],"right":[],"branchStatusLine":true}',
+    );
+
+    expect(config.left).toEqual([
+      { kind: "ignored", token: "comms" },
+      { kind: "ignored", token: "session-notes" },
+      { kind: "status", selector: "status:comms", key: "comms" },
+      { kind: "status", selector: "status:session-notes", key: "session-notes" },
+      { kind: "status", selector: "status:branch-status", key: "branch-status" },
+    ]);
+    expect(config).not.toHaveProperty("branchStatusLine");
+  });
+
+  it.each(["comms", "branch-status", "session-notes", "arbitrary"])("rejects duplicate status:%s placements", (key) => {
+    expect(compileConfig(JSON.stringify({ left: [`status:${key}`], right: [`status:${key}`] }), "json")).toEqual({
       ok: false,
-      error: { message: 'duplicate extension status "branch-status" at left[0] and branchStatusLine' },
+      error: { message: `duplicate extension status "${key}" at left[0] and right[0]` },
     });
   });
 

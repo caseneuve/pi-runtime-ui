@@ -1,7 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@earendil-works/pi-coding-agent";
 
 const STATUS_KEY = "branch-status";
-const RENDER_EVENT = "branch-status:changed";
 const MAX_LABEL_LENGTH = 24;
 
 function truncateLabel(label: string): string {
@@ -63,11 +62,7 @@ export default function branchStatusExtension(pi: ExtensionAPI) {
 
   const refresh = (ctx: ExtensionContext) => {
     lastCtx = ctx;
-    const nextRendered = updateStatus(ctx, lastRendered);
-    if (nextRendered !== lastRendered) {
-      pi.events.emit(RENDER_EVENT, undefined);
-    }
-    lastRendered = nextRendered;
+    lastRendered = updateStatus(ctx, lastRendered);
   };
 
   pi.events.on("bookmark:changed", () => {

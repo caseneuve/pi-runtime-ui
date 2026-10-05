@@ -2,12 +2,9 @@ import {
   CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
-  type SessionShutdownEvent,
   type SessionStartEvent,
 } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
-import { Value } from "typebox/value";
 import {
   formatGitStatsPlainCompact,
   formatGitStatsStyledCompact,
@@ -16,204 +13,76 @@ import {
   isGitRepo,
 } from "./shared/runtime-status-git";
 
-const MIN_GAP = 1;
-
-type EditorStatusState = {
-  name: string;
-  commsActive: boolean;
-};
-
-type EditorStatusSessionRegistration =
-  | {
-      event: "session_start";
-      handler: (event: SessionStartEvent, ctx: ExtensionContext) => Promise<void> | void;
-    }
-  | {
-      event: "session_shutdown";
-      handler: (event: SessionShutdownEvent, ctx: ExtensionContext) => Promise<void> | void;
-    };
-
 export type EditorStatusExtensionApi = {
-  events: ExtensionAPI["events"];
-  on(registration: EditorStatusSessionRegistration): void;
+  on(registration: {
+    event: "session_start";
+    handler: (event: SessionStartEvent, ctx: ExtensionContext) => Promise<void> | void;
+  }): void;
 };
 
-const agentChannelIdentitySchema = Type.Object({
-  id: Type.Optional(Type.String()),
-  label: Type.Optional(Type.String()),
-});
-const agentChannelCommsSchema = Type.Object({ active: Type.Boolean() });
+type NativeIndicator = Parameters<CustomEditor["setWorkingStatusIndicator"]>[0];
 
-function normalizeName(value: string | undefined): string | undefined {
-  const name = value?.trim();
-  return name || undefined;
+function nativeInformationFits(width: number, statusWidth: number, hiddenLineCount: number): boolean {
+  if (width < 1) return false;
+  if (statusWidth > 0 && width < statusWidth + 5) return false;
+  if (hiddenLineCount === 0) return true;
+
+  // Pi 1.0.3 centers its overflow label and needs a gap after the native status.
+  // Match that space budget, not the activity text, animation or lifecycle.
+  const overflowWidth = visibleWidth(` ↑ ${hiddenLineCount} more `);
+  if (overflowWidth + 2 > width) return false;
+  return statusWidth === 0 || Math.floor((width - overflowWidth) / 2) - (3 + statusWidth + 1) >= 1;
 }
 
-function readInitialState(ctx: ExtensionContext): EditorStatusState {
-  let name = "agent";
-  let commsActive = false;
-
-  for (const entry of ctx.sessionManager.getEntries()) {
-    if (entry.type !== "custom") continue;
-    if (entry.customType === "agent-channel-identity" && Value.Check(agentChannelIdentitySchema, entry.data)) {
-      name = entry.data.label || entry.data.id || name;
-    }
-    if (entry.customType === "agent-channel-comms" && Value.Check(agentChannelCommsSchema, entry.data)) {
-      commsActive = entry.data.active;
-    }
-  }
-
-  return { name, commsActive };
-}
-
-function buildLeftLabel(state: EditorStatusState): string {
-  return state.commsActive ? ` ${state.name} 📡 ` : ` ${state.name} `;
-}
-
-function clipLabel(text: string, maxWidth: number): string {
-  if (maxWidth <= 0) return "";
-  let out = "";
-  let used = 0;
-  for (const ch of text) {
-    const w = visibleWidth(ch);
-    if (used + w > maxWidth) break;
-    out += ch;
-    used += w;
-  }
-  return out;
-}
-
-function renderTopBorder(
-  width: number,
-  borderColor: (text: string) => string,
-  colorAccent: (text: string) => string,
-  leftLabel: string,
-  rightPlain: string,
-  rightStyled: string,
-): string {
-  if (width <= 0) return "";
-
-  const right = rightPlain.trim();
-  let plainLeft = leftLabel;
-
-  const rightBudget = right ? visibleWidth(right) + MIN_GAP : 0;
-  const leftMax = Math.max(3, width - 1 - rightBudget);
-  if (visibleWidth(plainLeft) > leftMax) {
-    const clipped = clipLabel(plainLeft.trim(), Math.max(1, leftMax - 2));
-    plainLeft = ` ${clipped} `;
-  }
-
-  const leftWidth = visibleWidth(plainLeft);
-  const leftSegmentWidth = 1 + leftWidth;
-  const rightWidth = right ? visibleWidth(right) : 0;
-  const rightSegmentWidth = rightWidth > 0 ? rightWidth + 3 : 0;
-
-  if (!right || width - leftSegmentWidth - rightSegmentWidth < MIN_GAP) {
-    const tailWidth = Math.max(0, width - leftSegmentWidth);
-    return borderColor("─") + colorAccent(plainLeft) + borderColor("─".repeat(tailWidth));
-  }
-
-  const gapWidth = width - leftSegmentWidth - rightSegmentWidth;
-  return (
-    borderColor("─") +
-    colorAccent(plainLeft) +
-    borderColor("─".repeat(gapWidth)) +
-    " " +
-    rightStyled +
-    " " +
-    borderColor("─")
-  );
-}
-
-function installEditor(
-  ctx: ExtensionContext,
-  pi: EditorStatusExtensionApi,
-  disposePreviousSubscriptions: () => void,
-  setDisposeSubscriptions: (dispose: () => void) => void,
-): void {
-  disposePreviousSubscriptions();
-
-  let state = readInitialState(ctx);
+function installEditor(ctx: ExtensionContext): void {
   let gitStatsCache: GitStatsCache | undefined;
 
-  const fullTheme = ctx.ui.theme;
-
   ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-    const disposeName = pi.events.on("agent-channel:name", (value) => {
-      if (!Value.Check(Type.String(), value)) return;
-      const name = normalizeName(value);
-      if (!name) return;
-      state = { ...state, name };
-      tui.requestRender();
-    });
-
-    const disposeComms = pi.events.on("agent-channel:comms", (value) => {
-      state = { ...state, commsActive: Value.Check(Type.Literal(true), value) };
-      tui.requestRender();
-    });
-
-    setDisposeSubscriptions(() => {
-      disposeName();
-      disposeComms();
-    });
-
     return new (class extends CustomEditor {
-      render(width: number): string[] {
-        const lines = super.render(width);
-        if (lines.length === 0 || width <= 0) return lines;
+      private nativeIndicator: NativeIndicator;
 
+      override setWorkingStatusIndicator(indicator: NativeIndicator): void {
+        this.nativeIndicator = indicator;
+        super.setWorkingStatusIndicator(indicator);
+      }
+
+      protected override renderTopBorder(width: number, hiddenLineCount: number): string {
+        if (width <= 0) return super.renderTopBorder(width, hiddenLineCount);
         gitStatsCache = getGitStats(gitStatsCache);
         const gitRepo = isGitRepo();
-        const rightLabel = formatGitStatsPlainCompact(gitStatsCache.stats) ?? (gitRepo ? "✓" : "");
-        lines[0] = renderTopBorder(
-          width,
-          this.borderColor.bind(this),
-          (text) => fullTheme.fg("accent", text),
-          buildLeftLabel(state),
-          rightLabel,
-          formatGitStatsStyledCompact(fullTheme, gitStatsCache.stats) ?? (gitRepo ? fullTheme.fg("dim", "✓") : ""),
-        );
-        return lines;
+        const rightPlain = formatGitStatsPlainCompact(gitStatsCache.stats) ?? (gitRepo ? "✓" : "");
+        if (!rightPlain) return super.renderTopBorder(width, hiddenLineCount);
+
+        const suffixWidth = visibleWidth(rightPlain) + 3;
+        const nativeWidth = width - suffixWidth;
+        const statusWidth = this.nativeIndicator
+          ? visibleWidth(this.nativeIndicator.renderInBorder(Math.max(1, width - 5)))
+          : 0;
+        if (!nativeInformationFits(nativeWidth, statusWidth, hiddenLineCount)) {
+          return super.renderTopBorder(width, hiddenLineCount);
+        }
+
+        const rightStyled =
+          formatGitStatsStyledCompact(ctx.ui.theme, gitStatsCache.stats) ?? ctx.ui.theme.fg("dim", "✓");
+        return `${super.renderTopBorder(nativeWidth, hiddenLineCount)} ${rightStyled} ${this.borderColor("─")}`;
       }
-    })(tui, theme, keybindings);
+    })(tui, theme, keybindings, { embedWorkingStatus: true });
   });
 }
 
 export function registerEditorStatusExtension(pi: EditorStatusExtensionApi): void {
-  let disposeSubscriptions: (() => void) | undefined;
-
-  const clearSubscriptions = () => {
-    disposeSubscriptions?.();
-    disposeSubscriptions = undefined;
-  };
-
   pi.on({
     event: "session_start",
-    handler: async (_event, ctx) => {
-      if (!ctx.hasUI) return;
-      installEditor(ctx, pi, clearSubscriptions, (dispose) => {
-        disposeSubscriptions = dispose;
-      });
-    },
-  });
-
-  pi.on({
-    event: "session_shutdown",
-    handler: async () => {
-      clearSubscriptions();
+    handler: (_event, ctx) => {
+      if (ctx.hasUI) installEditor(ctx);
     },
   });
 }
 
 export default function editorStatusExtension(pi: ExtensionAPI) {
   registerEditorStatusExtension({
-    events: pi.events,
     on: (registration) => {
-      if (registration.event === "session_start") {
-        pi.on("session_start", registration.handler);
-      } else {
-        pi.on("session_shutdown", registration.handler);
-      }
+      pi.on("session_start", registration.handler);
     },
   });
 }

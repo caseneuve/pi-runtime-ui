@@ -10,17 +10,20 @@ The package explicitly exposes these extensions:
 - `extensions/branch-status.ts` — shows session-tree divergence and labels in
   the status area.
 - `extensions/editor-status.ts` — is the sole owner of the editor component;
-  it renders agent/comms status and compact Git worktree stats in the editor
-  border.
+  it preserves Pi’s native activity and hidden-input indicators and adds compact
+  Git worktree stats on the right of the editor border. Git decoration is dropped
+  when it would crowd native information. It does not render agent identity or
+  comms state.
 - `extensions/runtime-footer.ts` — is the sole owner of the custom footer;
-  it renders a configurable runtime footer and can show branch status on a
-  second line.
+  it renders footer-owned runtime data and configured extension statuses.
 
-The extensions retain their existing event and status contracts. In particular,
-`branch-status` writes the `branch-status` status and emits
-`branch-status:changed`; `runtime-footer` listens for that event and for the
-existing agent-channel events. This package deliberately adds no provider,
-plugin, or cross-package integration API.
+`branch-status` publishes the `branch-status` status through Pi. Runtime-footer
+reads producer-owned text only through Pi’s public status map and configured
+`status:<key>` tokens; it does not subscribe to producer-specific events or
+interpret their state. Editor-status likewise has no agent-channel event or
+persistence dependency: agent identity belongs to its producer, and published
+name/comms text can be placed in configured footer status tokens. This package
+adds no provider, plugin, or cross-package integration API.
 
 ## Runtime footer configuration
 
@@ -83,10 +86,10 @@ mv ~/.pi/agent/runtime-footer.jsonc ~/.pi/agent/extensions/runtime-footer/config
 For a rebranded Pi distribution, substitute its `CONFIG_DIR_NAME` and resolved
 `getAgentDir()` location for `.pi` and `~/.pi/agent`.
 
-The default layout is left `cwd`, `git-branch`, `session-notes` and right
-`provider`, `model`, `thinking`, `cost`, `context`. Available block IDs are
-`cwd`, `project`, `git-branch`, `git-diff`, `session-notes`, `comms`,
-`provider`, `model`, `thinking`, `cost`, and `context`.
+The default layout is left `cwd`, `git-branch` and right `provider`, `model`,
+`thinking`, `cost`, `context`. Available block IDs are `cwd`, `project`,
+`git-branch`, `git-diff`, `provider`, `model`, `thinking`, `cost`,
+and `context`.
 
 **Breaking:** the legacy `git` shorthand has been removed. Use explicit
 `git-branch` and `git-diff` blocks instead. `git` is now an unknown token and
@@ -98,9 +101,13 @@ producer styling is preserved, including through ANSI-safe truncation. For
 example, `status:kilo-usage-day` reads the `kilo-usage-day` extension status.
 Missing or currently empty statuses render nothing. Empty `status:` tokens and
 duplicate placement of the same status key are configuration errors.
-`session-notes` and `status:session-notes` count as the same placement, and
-`status:branch-status` requires `branchStatusLine: false` to avoid duplicating
-the legacy second line.
+
+**Breaking:** named `comms` and `session-notes` blocks and the automatic branch
+status second line have been removed. Replace them with `status:comms`,
+`status:session-notes`, and `status:branch-status` wherever you want those
+producer statuses in your layout. The producer must publish the corresponding
+key; the footer does not infer it. Remove `branchStatusLine` from existing
+configuration—it is now ignored. No automatic migration or fallback is provided.
 
 `sep` and `S` are explicit separator pseudo-blocks. When either side contains
 one, both sides use explicit separator placement; otherwise the configured
@@ -125,11 +132,11 @@ selectors. `git` in `truncateBlocks` has no special meaning and does not match
 `git-branch` or `git-diff`. `thinking.mode` is
 `literal` (default) or `blocks` with the level-to-glyph `thinking.mapping`;
 `context.mode` is `percent` (default), `bar`, or `blocks`, and
-`context.barWidth` controls bar width. `branchStatusLine` defaults to `true`.
+`context.barWidth` controls bar width.
 
 ```jsonc
 {
-  "left": ["cwd", "git-branch", "session-notes"],
+  "left": ["cwd", "git-branch"],
   "right": ["provider", "model", "thinking", "cost", "context"],
   "separator": " · ",
   "truncate": null,
@@ -146,8 +153,7 @@ selectors. `git` in `truncateBlocks` has no special meaning and does not match
       "max": "█"
     }
   },
-  "context": { "mode": "percent", "barWidth": 8 },
-  "branchStatusLine": true
+  "context": { "mode": "percent", "barWidth": 8 }
 }
 ```
 

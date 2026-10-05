@@ -11,8 +11,6 @@ export type FooterBlockId =
   | "project"
   | "git-branch"
   | "git-diff"
-  | "session-notes"
-  | "comms"
   | "provider"
   | "model"
   | "thinking"
@@ -50,12 +48,11 @@ export type CompiledConfig = {
   truncateBlocks: string[] | null;
   thinking: ThinkingConfig;
   context: ContextConfig;
-  branchStatusLine: boolean;
 };
 
-const DEFAULT_LEFT = ["cwd", "git-branch", "session-notes"] as const;
+const DEFAULT_LEFT = ["cwd", "git-branch"] as const;
 const DEFAULT_RIGHT = ["provider", "model", "thinking", "cost", "context"] as const;
-const KNOWN_BLOCKS = new Set<string>([...DEFAULT_LEFT, ...DEFAULT_RIGHT, "project", "git-diff", "comms"]);
+const KNOWN_BLOCKS = new Set<string>([...DEFAULT_LEFT, ...DEFAULT_RIGHT, "project", "git-diff"]);
 const THINKING_GLYPHS = new Set(["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]);
 export const DEFAULT_THINKING_MAPPING = {
   off: "▁",
@@ -77,10 +74,6 @@ function isJsonString(value: JsonValue | undefined): value is string {
 
 function isJsonNumber(value: JsonValue | undefined): value is number {
   return typeof value === "number";
-}
-
-function isJsonBoolean(value: JsonValue | undefined): value is boolean {
-  return typeof value === "boolean";
 }
 
 function normalizeTabs(value: string): string {
@@ -184,12 +177,7 @@ function validateStatuses(config: CompiledConfig): Diagnostic | undefined {
     ["right", config.right],
   ] as const) {
     for (const [index, token] of tokens.entries()) {
-      const key =
-        token.kind === "status"
-          ? token.key
-          : token.kind === "block" && token.blockId === "session-notes"
-            ? "session-notes"
-            : undefined;
+      const key = token.kind === "status" ? token.key : undefined;
       if (key === undefined) continue;
       const location = `${side}[${index}]`;
       const previous = placements.get(key);
@@ -206,11 +194,6 @@ function validateStatuses(config: CompiledConfig): Diagnostic | undefined {
     }
   }
 
-  if (config.branchStatusLine && placements.has("branch-status")) {
-    return {
-      message: `duplicate extension status "branch-status" at ${placements.get("branch-status")} and branchStatusLine`,
-    };
-  }
   return undefined;
 }
 
@@ -225,7 +208,6 @@ function decodeConfig(value: JsonValue): Result<CompiledConfig, Diagnostic> {
     truncateBlocks: compileTruncateBlocks(value.truncateBlocks),
     thinking: compileThinking(value.thinking),
     context: compileContext(value.context),
-    branchStatusLine: isJsonBoolean(value.branchStatusLine) ? value.branchStatusLine : true,
   };
   const diagnostic = validateStatuses(config);
   return diagnostic ? { ok: false, error: diagnostic } : { ok: true, value: config };

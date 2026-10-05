@@ -33,7 +33,6 @@ function renderLeft(
     separator: options.separator ?? " | ",
     truncate: options.truncate ?? null,
     truncateBlocks: options.truncateBlocks ?? null,
-    branchStatusLine: false,
   });
 
   const context = {
@@ -58,7 +57,6 @@ function renderLeft(
     { addedLines: 2, removedLines: 1, changedFiles: 1, addedFiles: 0, untrackedFiles: 0 },
     "project",
     options.statuses ?? new Map(),
-    false,
     options.explicitSeparatorMode ?? config.left.some((token) => token.kind === "separator"),
   );
 }

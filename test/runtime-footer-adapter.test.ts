@@ -13,13 +13,13 @@ import {
   registerRuntimeFooterExtension,
 } from "../extensions/runtime-footer";
 
-type AgentChannelTestPayload = boolean | { active: boolean };
+type TestEventPayload = Parameters<RuntimeFooterExtensionApi["events"]["emit"]>[1];
 
 type CapturedAdapter = {
   command: ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
   sessionStart: ((event: SessionStartEvent, ctx: ExtensionContext) => Promise<void> | void) | undefined;
   sessionTree: ((event: SessionTreeEvent, ctx: ExtensionContext) => Promise<void> | void) | undefined;
-  emit(channel: string, data: AgentChannelTestPayload): void;
+  emit(channel: string, data: TestEventPayload): void;
   listenerCount(channel: string): number;
 };
 
@@ -84,7 +84,7 @@ function createAccessRecorder(existingPaths: readonly string[]): AccessRecorder 
 
 function createAdapter(effects: RuntimeFooterExtensionEffects): CapturedAdapter {
   const handlers = new Map<string, Set<() => void>>();
-  let payload: AgentChannelTestPayload = false;
+  let payload: TestEventPayload;
   const captured: CapturedAdapter = {
     command: undefined,
     sessionStart: undefined,
@@ -284,13 +284,13 @@ describe("runtime-footer extension adapters", () => {
     expect(notifications).toEqual([expect.stringContaining("permission denied")]);
   });
 
-  it("rerenders the comms block after a decoded comms event", () => {
+  it("renders and clears producer statuses from the map alone without producer subscriptions or payload decoding", () => {
     const globalJsonc = configPath("global", "config.jsonc");
     const effects: RuntimeFooterExtensionEffects = {
       getAgentDir: () => agentDir,
       fileExists: (pathname) => pathname === globalJsonc,
       readMtime: () => 1,
-      readText: () => '{"left":["comms"],"right":[],"branchStatusLine":false}',
+      readText: () => '{"left":["status:comms","status:branch-status"],"right":[]}',
       ensureConfigFile: () => {},
       openConfigInEditor: async () => ({ ok: true, message: "opened" }),
     };
@@ -301,6 +301,7 @@ describe("runtime-footer extension adapters", () => {
     adapter.sessionStart({ type: "session_start", reason: "startup" }, context);
     const footerFactory = context.getFooterFactory();
     let renders = 0;
+    const statuses = new Map<string, string>();
     // SAFETY: this adapter render path uses requestRender, fg, and the listed
     // footer-data methods; this fixture provides exactly those runtime members.
     const branchListeners = new Set<() => void>();
@@ -316,7 +317,7 @@ describe("runtime-footer extension adapters", () => {
       // SAFETY: the footer factory reads only these footer-data methods.
       {
         getAvailableProviderCount: () => 0,
-        getExtensionStatuses: () => new Map<string, string>(),
+        getExtensionStatuses: () => statuses,
         getGitBranch: () => null,
         onBranchChange(listener): () => void {
           branchListeners.add(listener);
@@ -325,21 +326,36 @@ describe("runtime-footer extension adapters", () => {
       } as Parameters<NonNullable<typeof footerFactory>>[2],
     );
 
-    expect(component.render(80)[0]).not.toContain("📡");
+    expect(component.render(80)).toHaveLength(1);
+    expect(component.render(80)[0].trim()).toBe("");
+    expect(adapter.listenerCount("agent-channel:comms")).toBe(0);
+    expect(adapter.listenerCount("branch-status:changed")).toBe(0);
     adapter.emit("agent-channel:comms", true);
-    expect(component.render(80)[0]).toContain("📡");
     adapter.emit("agent-channel:comms", { active: true });
-    expect(component.render(80)[0]).not.toContain("📡");
-    for (const listener of branchListeners) listener?.();
-    expect(renders).toBe(3);
-    expect(adapter.listenerCount("agent-channel:comms")).toBe(2);
+    adapter.emit("branch-status:changed", undefined);
+    expect(component.render(80)[0].trim()).toBe("");
+    expect(renders).toBe(0);
 
+    statuses.set("comms", "producer-owned active text");
+    statuses.set("branch-status", "[⋔ label]");
+    expect(component.render(80)).toHaveLength(1);
+    expect(component.render(80)[0]).toContain("producer-owned active text · [⋔ label]");
+    adapter.emit("agent-channel:comms", false);
+    expect(component.render(80)[0]).toContain("producer-owned active text");
+    statuses.delete("comms");
+    statuses.set("branch-status", "");
+    expect(component.render(80)[0].trim()).toBe("");
+
+    for (const listener of branchListeners) listener();
+    adapter.emit("runtime-footer:config-changed", undefined);
+    expect(renders).toBe(2);
     if (!component.dispose) throw new Error("expected footer disposal");
     component.dispose();
-    expect(adapter.listenerCount("agent-channel:comms")).toBe(1);
-    adapter.emit("agent-channel:comms", true);
-    for (const listener of branchListeners) listener?.();
-    expect(renders).toBe(3);
+    expect(branchListeners.size).toBe(0);
+    expect(adapter.listenerCount("runtime-footer:config-changed")).toBe(0);
+    for (const listener of branchListeners) listener();
+    adapter.emit("runtime-footer:config-changed", undefined);
+    expect(renders).toBe(2);
   });
 
   it("limits an untrusted local command to canonical project candidates and reports trust", async () => {

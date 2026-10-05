@@ -367,14 +367,17 @@ describe("runtime-footer status placement validation", () => {
   });
 
   it("allows a well-formed status before its producer appears", () => {
-    expect(parseConfig({ left: ["status:not-running"], right: [], branchStatusLine: false }).left).toEqual([
+    expect(parseConfig({ left: ["status:not-running"], right: [] }).left).toEqual([
       { kind: "status", selector: "status:not-running", key: "not-running" },
     ]);
   });
 
   it.each([
-    ["named alias", { left: ["session-notes", "status:session-notes"], right: [] }, "session-notes"],
-    ["legacy branch line", { left: ["status:branch-status"], right: [], branchStatusLine: true }, "branch-status"],
+    [
+      "branch status on two sides",
+      { left: ["status:branch-status"], right: ["status:branch-status"] },
+      "branch-status",
+    ],
     ["two configured sides", { left: ["status:hotl"], right: ["status:hotl"] }, "hotl"],
   ])("rejects duplicate status placement through %s", (_case, config, key) => {
     expect(() => parseConfig(config)).toThrow(new RegExp(`duplicate extension status.*${key}`));
