@@ -32,7 +32,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "verify": "npm run check:ci && npm run typecheck && npm run lint:anti-slop && npm test",
+    "verify": "npm run check:ci && npm run typecheck && npm test",
     "pack:check": "npm pack --dry-run --json",
     "prepare": "node scripts/install-prek-hook.mjs"
   },

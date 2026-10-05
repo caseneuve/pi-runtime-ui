@@ -214,7 +214,13 @@ npx prek run --all-files
 ```
 
 `npm run check` applies Biome formatting/lint fixes. `npm run check:ci` is the
-non-mutating CI equivalent.
+non-mutating CI equivalent. `npm run verify` runs Biome, typechecking, and tests
+without requiring local-only tooling.
+
+Oxlint anti-slop lint is optional local development tooling. Its ignored
+`oxlint.config.ts` and `tools/oxlint/anti-slop/` plugin must be provisioned
+locally before running `npm run lint:anti-slop`; they are not included in Git
+checkouts or published packages. CI does not run this command.
 
 ## Releases
 

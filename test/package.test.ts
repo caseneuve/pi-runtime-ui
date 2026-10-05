@@ -116,9 +116,7 @@ test("uses the standard local quality gates", () => {
   expect(packageJson.scripts["check:ci"]).toBe("biome check --error-on-warnings .");
   expect(packageJson.scripts.typecheck).toBe("tsc --noEmit");
   expect(packageJson.scripts["lint:anti-slop"]).toBe("oxlint --config oxlint.config.ts -A all extensions test scripts");
-  expect(packageJson.scripts.verify).toBe(
-    "npm run check:ci && npm run typecheck && npm run lint:anti-slop && npm test",
-  );
+  expect(packageJson.scripts.verify).toBe("npm run check:ci && npm run typecheck && npm test");
   expect(packageJson.scripts.test).toBe("vitest run");
   expect(packageJson.scripts["test:coverage"]).toBe("vitest run --coverage");
   expect(packageJson.scripts.prepare).toBe("node scripts/install-prek-hook.mjs");
