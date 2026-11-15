@@ -1,5 +1,7 @@
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { type Static, Type } from "typebox";
 import { Value } from "typebox/value";
@@ -22,6 +24,9 @@ const packageManifestSchema = Type.Object({
   keywords: Type.Array(Type.String()),
   pi: Type.Object({}),
   scripts: Type.Record(Type.String(), Type.String()),
+  dependencies: Type.Optional(Type.Record(Type.String(), Type.String())),
+  peerDependencies: Type.Optional(Type.Record(Type.String(), Type.String())),
+  devDependencies: Type.Optional(Type.Record(Type.String(), Type.String())),
 });
 
 type PackageManifestJson = Static<typeof packageManifestSchema>;
@@ -91,14 +96,23 @@ test("ignores non-resource Pi metadata", () => {
   expect(resourceEntries(manifest.pi)).toEqual([["extensions", ["./extensions"]]]);
 });
 
-test("declares intentional Pi resources that exist", () => {
+test("declares intentional in-package resources covered by the files allowlist", () => {
   expect(packageJson.keywords).toContain("pi-package");
+  expect(resourceEntries(packageJson.pi).length).toBeGreaterThan(0);
 
   for (const [resourceKind, entries] of resourceEntries(packageJson.pi)) {
     expect(entries, `${resourceKind} manifest entries`).not.toHaveLength(0);
 
     for (const entry of entries) {
-      expect(existsSync(resolve(repositoryRoot, entry)), `${resourceKind}: ${entry}`).toBe(true);
+      const pathname = resolve(repositoryRoot, entry);
+      const local = relative(repositoryRoot, pathname);
+      expect(isAbsolute(entry)).toBe(false);
+      expect(local.startsWith("..")).toBe(false);
+      expect(existsSync(pathname), `${resourceKind}: ${entry}`).toBe(true);
+      expect(
+        packageJson.files.some((file) => local === file || local.startsWith(`${file}${sep}`)),
+        `files must cover ${entry}`,
+      ).toBe(true);
     }
   }
 });
@@ -111,15 +125,74 @@ test("ships each declared resource directory deliberately", () => {
   }
 });
 
-test("uses the standard local quality gates", () => {
-  expect(packageJson.scripts.check).toBe("biome check --write --error-on-warnings .");
-  expect(packageJson.scripts["check:ci"]).toBe("biome check --error-on-warnings .");
-  expect(packageJson.scripts.typecheck).toBe("tsc --noEmit");
-  expect(packageJson.scripts["lint:anti-slop"]).toBe("oxlint --config oxlint.config.ts -A all extensions test scripts");
-  expect(packageJson.scripts.verify).toBe("npm run check:ci && npm run typecheck && npm test");
-  expect(packageJson.scripts.test).toBe("vitest run");
-  expect(packageJson.scripts["test:coverage"]).toBe("vitest run --coverage");
-  expect(packageJson.scripts.prepare).toBe("node scripts/install-prek-hook.mjs");
+test("keeps host APIs out of runtime dependencies and uses host peers only where imported", () => {
+  for (const host of [
+    "@earendil-works/pi-coding-agent",
+    "@earendil-works/pi-agent-core",
+    "@earendil-works/pi-ai",
+    "@earendil-works/pi-tui",
+    "typebox",
+  ]) {
+    expect(packageJson.dependencies?.[host]).toBeUndefined();
+
+    if (packageJson.peerDependencies?.[host]) {
+      expect(packageJson.peerDependencies[host]).toBe("*");
+      expect(packageJson.devDependencies?.[host]).toMatch(/^\d+\.\d+\.\d+$/);
+    }
+  }
+
+  // TypeBox is a metadata-test dependency, not an extension import.
+  expect(packageJson.peerDependencies?.typebox).toBeUndefined();
+});
+
+test.each(["", "**/.pi\n"])("allows shared Pi docs but excludes local state with global ignores %j", (globalIgnore) => {
+  const root = mkdtempSync(resolve(tmpdir(), "runtime-ui-ignore-"));
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: resolve(root, "empty-gitconfig"), GIT_CONFIG_NOSYSTEM: "1" };
+
+  const git = (...args: string[]) =>
+    execFileSync("git", ["-c", `core.excludesFile=${resolve(root, "global-ignore")}`, ...args], {
+      cwd: root,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+  try {
+    writeFileSync(resolve(root, "empty-gitconfig"), "");
+    writeFileSync(resolve(root, "global-ignore"), globalIgnore);
+    writeFileSync(resolve(root, ".gitignore"), readFileSync(resolve(repositoryRoot, ".gitignore")));
+    mkdirSync(resolve(root, ".pi/docs"), { recursive: true });
+    mkdirSync(resolve(root, ".pi/state"));
+    mkdirSync(resolve(root, "nested/.pi"), { recursive: true });
+    writeFileSync(resolve(root, "nested/.pi/settings.json"), "fixture");
+
+    for (const file of ["docs/shared.md", "settings.json", "mcp.json", "state/cache.json"]) {
+      writeFileSync(resolve(root, ".pi", file), "fixture");
+    }
+
+    git("init", "-q");
+    git("add", ".pi/docs/shared.md");
+    expect(git("ls-files").trim()).toBe(".pi/docs/shared.md");
+
+    for (const file of ["settings.json", "mcp.json", "state/cache.json"]) {
+      expect(git("check-ignore", "--no-index", `.pi/${file}`).trim()).toBe(`.pi/${file}`);
+    }
+
+    if (globalIgnore) {
+      expect(git("check-ignore", "--no-index", "nested/.pi/settings.json").trim()).toBe("nested/.pi/settings.json");
+    }
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("provides portable development gates and the guarded lifecycle helper", () => {
+  for (const gate of ["check", "check:ci", "typecheck", "test", "test:coverage", "verify", "pack:check", "prepare"]) {
+    expect(packageJson.scripts[gate]).toBeTypeOf("string");
+    expect(packageJson.scripts[gate].length).toBeGreaterThan(0);
+  }
+
+  expect(Object.values(packageJson.scripts).join(" ")).not.toMatch(/oxlint|anti-slop|\/home\//);
   expect(existsSync(resolve(repositoryRoot, "scripts", "install-prek-hook.mjs"))).toBe(true);
 
   const biomeConfig = decodeBiomeConfig(readFileSync(resolve(repositoryRoot, "biome.json"), "utf8"));

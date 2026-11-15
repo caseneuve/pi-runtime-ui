@@ -22,7 +22,13 @@
   `status:comms`, `status:session-notes`, or `status:branch-status` explicitly;
   their producers own the status text and clearing. Removed footer subscriptions
   to producer events and the redundant `branch-status:changed` producer event.
-- Updated pinned development Pi APIs to 1.0.3; wildcard host peers are unchanged.
+- Updated imported development Pi APIs to 1.5.2 and require Node >=22.19.0;
+  wildcard host peers are unchanged. Removed unused AI/TypeBox peers; TypeBox
+  1.3.27 remains test-only.
+- Adopted the portable tooling/documentation baseline manually. Removed optional
+  per-package Oxlint coupling; central local review stays separate from public CI.
+  Root `.pi/docs/` can be tracked even with a global `.pi` ignore, while local
+  settings/state and globally ignored nested `.pi` directories remain protected.
 
 - **Breaking:** Moved runtime-footer configuration from root-level Pi config
   paths to the canonical project and global extension-resource directories.

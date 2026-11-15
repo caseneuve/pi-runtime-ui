@@ -27,7 +27,7 @@ function nativeInformationFits(width: number, statusWidth: number, hiddenLineCou
   if (statusWidth > 0 && width < statusWidth + 5) return false;
   if (hiddenLineCount === 0) return true;
 
-  // Pi 1.0.3 centers its overflow label and needs a gap after the native status.
+  // Pi 1.5.2 centers its overflow label and needs a gap after the native status.
   // Match that space budget, not the activity text, animation or lifecycle.
   const overflowWidth = visibleWidth(` ↑ ${hiddenLineCount} more `);
   if (overflowWidth + 2 > width) return false;

@@ -159,11 +159,24 @@ selectors. `git` in `truncateBlocks` has no special meaning and does not match
 
 ## Install
 
-Install a local checkout while developing:
+Requires Node >=22.19.0; compatibility is checked against Pi 1.5.2 with exact
+development pins for the imported host APIs and `"*"` host peers. TypeBox is a
+test-only dependency, not a runtime requirement.
+
+Install a reviewed local checkout natively:
 
 ```bash
-pi install ~/git/pi/pi-runtime-ui
+pi install /absolute/path/to/pi-runtime-ui     # personal
+pi install -l /absolute/path/to/pi-runtime-ui  # current project
 ```
+
+Local directories load in place; Pi does not install or modify their dependency
+trees. Run `npm ci` in the checkout separately for development/tests. Project-local
+packages load only after project trust is granted. If the local install command
+refuses an untrusted project, review its configuration, then use
+`pi install -l --approve /absolute/path/to/pi-runtime-ui` for that operation.
+Avoid retaining broad extension loaders or another checkout of the same package:
+local paths and Git sources are distinct identities and can double-load owners.
 
 Install a reviewed immutable release in normal use:
 
@@ -196,7 +209,12 @@ Git is installed and the working directory is a repository.
 
 This checkout was generated from the private
 [`template-pi-package`](https://github.com/caseneuve/template-pi-package)
-Copier template. For a clean checkout:
+Copier template. The portable baseline was manually adopted from template master
+`08350707812e7036ab9477e879c1b029febd552b` (local, unpushed at adoption), not by a
+Copier update. `.copier-answers.yml` retains historical generation revision
+`2842902` and records the current API answer; it does not claim that baseline SHA
+is remotely available. The template is not a runtime or public CI dependency.
+For a clean checkout:
 
 ```bash
 npm ci
@@ -217,15 +235,29 @@ npx prek run --all-files
 non-mutating CI equivalent. `npm run verify` runs Biome, typechecking, and tests
 without requiring local-only tooling.
 
-Oxlint anti-slop lint is optional local development tooling. Its ignored
-`oxlint.config.ts` and `tools/oxlint/anti-slop/` plugin must be provisioned
-locally before running `npm run lint:anti-slop`; they are not included in Git
-checkouts or published packages. CI does not run this command.
+Extra local anti-slop review uses the author's existing central runner separately,
+on an explicit file set. Do not provision a package-local plugin, vendor rules,
+or add private tooling paths to package scripts/CI.
+
+## Ownership and updates
+
+Resources, tests, metadata/lockfile, README, changelog and `AGENTS.md` belong to
+this repository. Shared template tooling updates are opt-in reviewed diffs;
+preserve package-specific coverage and behavior. Apply metadata/pin/instruction
+changes manually; resource answers are not an update-time resource manager.
+
+`pi update` updates Pi itself; `pi update --extensions` reconciles installed
+packages, not Copier tooling or local checkout dependencies. Git tags/commit
+sources remain pinned. `.pi/*` settings/state are ignored; intentionally shared
+`.pi/docs/` notes may be tracked. Git ignores and npm's explicit `files` allowlist
+are separate: only extensions, the lifecycle helper and package documentation
+ship; tests, todos and local configuration do not.
 
 ## Releases
 
-This project uses npm-compatible CalVer: `YYYY.M.D[.PATCH]` (for example,
-`2026.7.10` or `2026.7.10.1`). Before a release:
+Use three-component unpadded CalVer `YYYY.M.D` (for example, `2026.7.10`).
+Agree on valid npm SemVer before a second same-day release; never append a fourth
+numeric component. Before a release:
 
 1. Run `npm run verify`, `npm run test:coverage`, and `npm run pack:check`.
 2. Update `CHANGELOG.md` and `package.json` with the release version.

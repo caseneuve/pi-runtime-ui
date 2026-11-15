@@ -3,5 +3,7 @@
 .reviews/
 coverage/
 node_modules/
-tools
-/oxlint.config.ts
+# Local Pi settings/state stay private; shared notes may be tracked deliberately.
+!/.pi/
+.pi/*
+!.pi/docs/
