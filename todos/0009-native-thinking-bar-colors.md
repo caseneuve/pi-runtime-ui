@@ -1,3 +1,9 @@
+---
+title: Native thinking-bar colors
+status: done
+type: bug
+---
+
 # Native thinking-bar colors
 
 ## Scope
